@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+
+        <!-- contract.template — 列表视图（用 <tree> 根元素！） -->
+        <record id="view_contract_template_list" model="ir.ui.view">
+            <field name="name">contract.template.list</field>
+            <field name="model">contract.template</field>
+            <field name="arch" type="xml">
+                <tree string="合同模板">
+                    <field name="name"/>
+                    <field name="type"/>
+                    <field name="version"/>
+                    <field name="is_active"/>
+                    <field name="usage_count"/>
+                </tree>
+            </field>
+        </record>
+
+        <!-- contract.template — 表单视图 -->
+        <record id="view_contract_template_form" model="ir.ui.view">
+            <field name="name">contract.template.form</field>
+            <field name="model">contract.template</field>
+            <field name="arch" type="xml">
+                <form string="合同模板">
+                    <sheet>
+                        <group>
+                            <group string="基本信息">
+                                <field name="name"/>
+                                <field name="type"/>
+                                <field name="version"/>
+                                <field name="is_active"/>
+                            </group>
+                            <group string="统计">
+                                <field name="usage_count"/>
+                            </group>
+                        </group>
+                        <notebook>
+                            <page string="模板条款" name="clauses">
+                                <field name="clause_ids">
+                                    <tree editable="bottom" create="true" delete="true">
+                                        <field name="sort_order"/>
+                                        <field name="name"/>
+                                        <field name="clause_type"/>
+                                        <field name="is_required"/>
+                                        <field name="content"/>
+                                    </tree>
+                                </field>
+                            </page>
+                        </notebook>
+                    </sheet>
+                </form>
+            </field>
+        </record>
+
+        <!-- contract.template — 搜索视图 -->
+        <record id="view_contract_template_search" model="ir.ui.view">
+            <field name="name">contract.template.search</field>
+            <field name="model">contract.template</field>
+            <field name="arch" type="xml">
+                <search string="合同模板">
+                    <field name="name"/>
+                    <field name="type"/>
+                    <separator/>
+                    <filter string="已启用" name="filter_active" domain="[('is_active','=',True)]"/>
+                    <filter string="采购" name="filter_purchase" domain="[('type','=','purchase')]"/>
+                    <filter string="销售" name="filter_sale" domain="[('type','=','sale')]"/>
+                    <group expand="0" string="分组">
+                        <filter string="类型" name="group_type" context="{'group_by':'type'}"/>
+                    </group>
+                </search>
+            </field>
+        </record>
+
+        <!-- 合同模板 Action 菜单入口 -->
+        <record id="action_contract_template" model="ir.actions.act_window">
+            <field name="name">合同模板</field>
+            <field name="res_model">contract.template</field>
+            <field name="view_mode">tree,form</field>
+        </record>
+
+    </data>
+</odoo>

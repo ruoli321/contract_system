@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- contract.signatory 签约方档案视图 -->
+<odoo>
+    <data>
+
+        <!-- ═══ List 列表 ═══ -->
+        <record id="view_contract_signatory_list" model="ir.ui.view">
+            <field name="name">contract.signatory.list</field>
+            <field name="model">contract.signatory</field>
+            <field name="arch" type="xml">
+                <tree string="签约方档案" default_order="name">
+                    <field name="name"/>
+                    <field name="job_title"/>
+                    <field name="department"/>
+                    <field name="company_code"/>
+                    <field name="company_id"/>
+                    <field name="phone"/>
+                    <field name="contract_count"/>
+                </tree>
+            </field>
+        </record>
+
+        <!-- ═══ Form 表单 ═══ -->
+        <record id="view_contract_signatory_form" model="ir.ui.view">
+            <field name="name">contract.signatory.form</field>
+            <field name="model">contract.signatory</field>
+            <field name="arch" type="xml">
+                <form string="签约方">
+                    <header>
+                        <button name="action_view_contracts" string="查看签署的合同"
+                                type="object" class="btn-secondary"
+                                invisible="contract_count == 0"/>
+                    </header>
+
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_contracts" type="object"
+                                class="oe_stat_button" icon="fa-file-text-o">
+                            <field name="contract_count" widget="statinfo"
+                                   string="签署合同"/>
+                        </button>
+                    </div>
+
+                    <sheet>
+                        <group>
+                            <group string="基本信息">
+                                <field name="name"/>
+                                <field name="job_title"/>
+                                <field name="department"/>
+                                <field name="company_code"/>
+                                <field name="company_id"/>
+                                <field name="user_id"/>
+                            </group>
+                            <group string="联系方式">
+                                <field name="phone"/>
+                                <field name="mobile"/>
+                                <field name="email"/>
+                            </group>
+                        </group>
+                        <group>
+                            <group string="印章信息">
+                                <field name="seal_name"/>
+                                <field name="seal_info"/>
+                            </group>
+                        </group>
+                    </sheet>
+
+                    <field name="message_ids" widget="mail_thread"/>
+                </form>
+            </field>
+        </record>
+
+        <!-- ═══ Search 搜索 ═══ -->
+        <record id="view_contract_signatory_search" model="ir.ui.view">
+            <field name="name">contract.signatory.search</field>
+            <field name="model">contract.signatory</field>
+            <field name="arch" type="xml">
+                <search string="搜索签约方">
+                    <field name="name"/>
+                    <field name="job_title"/>
+                    <field name="department"/>
+                    <group expand="0" string="分组">
+                        <filter name="group_department" string="部门" context="{'group_by':'department'}"/>
+                        <filter name="group_company" string="公司" context="{'group_by':'company_id'}"/>
+                    </group>
+                </search>
+            </field>
+        </record>
+
+        <!-- ═══ Act Window ═══ -->
+        <record id="action_contract_signatory" model="ir.actions.act_window">
+            <field name="name">签约方档案</field>
+            <field name="res_model">contract.signatory</field>
+            <field name="view_mode">tree,form</field>
+            <field name="search_view_id" ref="view_contract_signatory_search"/>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">创建第一个签约方</p>
+                <p>签约方档案用于合同的「签约主体」字段关联</p>
+            </field>
+        </record>
+
+    </data>
+</odoo>

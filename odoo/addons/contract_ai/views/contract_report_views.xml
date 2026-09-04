@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- M17 · 合同台账报告：Pivot + Graph + 增强 Search -->
+<odoo>
+    <data>
+
+        <!-- ═══ 增强 Search（台账专用） ═══ -->
+        <record id="view_contract_search_ledger" model="ir.ui.view">
+            <field name="name">contract.contract.search.ledger</field>
+            <field name="model">contract.contract</field>
+            <field name="arch" type="xml">
+                <search string="合同台账">
+                    <field name="code"/>
+                    <field name="name"/>
+                    <field name="partner_a"/>
+                    <field name="partner_b"/>
+                    <separator/>
+
+                    <!-- 快速过滤 -->
+                    <filter name="draft" string="草稿" domain="[('state','=','draft')]"/>
+                    <filter name="approving" string="审批中" domain="[('state','=','approval')]"/>
+                    <filter name="sealed" string="已生效" domain="[('state','=','seal')]"/>
+                    <filter name="archived" string="已归档" domain="[('state','=','archived')]"/>
+                    <filter name="void" string="已作废" domain="[('state','=','void')]"/>
+                    <separator/>
+
+                    <filter name="purchase" string="采购" domain="[('type','=','purchase')]"/>
+                    <filter name="sale" string="销售" domain="[('type','=','sale')]"/>
+                    <filter name="service" string="服务" domain="[('type','=','service')]"/>
+                    <filter name="lease" string="租赁" domain="[('type','=','lease')]"/>
+                    <separator/>
+
+                    <!-- 分组 -->
+                    <group expand="0" string="按分组">
+                        <filter name="group_type" string="合同类型"
+                                context="{'group_by':'type'}"/>
+                        <filter name="group_state" string="状态"
+                                context="{'group_by':'state'}"/>
+                        <filter name="group_partner_a" string="甲方"
+                                context="{'group_by':'partner_a'}"/>
+                    </group>
+                </search>
+            </field>
+        </record>
+
+        <!-- ═══ Pivot：按类型 × 状态汇总金额 ═══ -->
+        <record id="view_contract_pivot" model="ir.ui.view">
+            <field name="name">contract.contract.pivot</field>
+            <field name="model">contract.contract</field>
+            <field name="arch" type="xml">
+                <pivot string="合同台账汇总分析">
+                    <field name="type" type="row"/>
+                    <field name="state" type="row"/>
+                    <field name="amount" type="measure"/>
+                    <field name="planned_amount_total" type="measure"/>
+                    <field name="paid_amount_total" type="measure"/>
+                </pivot>
+            </field>
+        </record>
+
+        <!-- ═══ Graph：按合同类型金额柱状图 ═══ -->
+        <record id="view_contract_graph" model="ir.ui.view">
+            <field name="name">contract.contract.graph</field>
+            <field name="model">contract.contract</field>
+            <field name="arch" type="xml">
+                <graph string="合同台账金额分布" type="bar">
+                    <field name="type"/>
+                    <field name="amount"/>
+                </graph>
+            </field>
+        </record>
+
+        <!-- ═══ 台账 List（增强） ═══ -->
+        <record id="view_contract_tree_ledger" model="ir.ui.view">
+            <field name="name">contract.contract.tree.ledger</field>
+            <field name="model">contract.contract</field>
+            <field name="arch" type="xml">
+                <tree string="合同台账" default_order="date_signed desc">
+                    <field name="code"/>
+                    <field name="name"/>
+                    <field name="type"/>
+                    <field name="state" widget="badge"/>
+                    <field name="partner_a"/>
+                    <field name="partner_b"/>
+                    <field name="date_signed"/>
+                    <field name="amount"/>
+                    <field name="planned_amount_total"/>
+                    <field name="paid_amount_total"/>
+                    <field name="remaining_amount_total"/>
+                    <field name="overdue_count"/>
+                </tree>
+            </field>
+        </record>
+
+        <!-- ═══ Act Window：合同台账 ═══ -->
+        <record id="action_contract_ledger" model="ir.actions.act_window">
+            <field name="name">📊 合同台账</field>
+            <field name="res_model">contract.contract</field>
+            <field name="view_mode">tree,pivot,graph,form</field>
+            <field name="search_view_id" ref="view_contract_search_ledger"/>
+            <field name="views" eval="[
+                (ref('view_contract_tree_ledger'), 'tree'),
+                (ref('view_contract_pivot'), 'pivot'),
+                (ref('view_contract_graph'), 'graph'),
+                (ref('view_contract_form'), 'form'),
+            ]"/>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">合同台账</p>
+                <p>切换到 Pivot 视图可按类型 × 状态多维分析金额</p>
+            </field>
+        </record>
+
+    </data>
+</odoo>

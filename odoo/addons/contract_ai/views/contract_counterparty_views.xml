@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- contract.counterparty 相对方档案视图 -->
+<odoo>
+    <data>
+
+        <!-- ═══ List 列表 ═══ -->
+        <record id="view_contract_counterparty_list" model="ir.ui.view">
+            <field name="name">contract.counterparty.list</field>
+            <field name="model">contract.counterparty</field>
+            <field name="arch" type="xml">
+                <tree string="相对方档案" default_order="name">
+                    <field name="name"/>
+                    <field name="party_type"/>
+                    <field name="is_internal"/>
+                    <field name="unified_social_code"/>
+                    <field name="legal_representative"/>
+                    <field name="contact_phone"/>
+                    <field name="contract_count"/>
+                </tree>
+            </field>
+        </record>
+
+        <!-- ═══ Form 表单 ═══ -->
+        <record id="view_contract_counterparty_form" model="ir.ui.view">
+            <field name="name">contract.counterparty.form</field>
+            <field name="model">contract.counterparty</field>
+            <field name="arch" type="xml">
+                <form string="相对方">
+                    <header>
+                        <button name="action_view_contracts" string="查看关联合同"
+                                type="object" class="btn-secondary"
+                                invisible="contract_count == 0"/>
+                    </header>
+
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_contracts" type="object"
+                                class="oe_stat_button" icon="fa-file-text-o">
+                            <field name="contract_count" widget="statinfo"
+                                   string="关联合同"/>
+                        </button>
+                    </div>
+
+                    <sheet>
+                        <group>
+                            <group string="基本信息">
+                                <field name="name"/>
+                                <field name="party_type"/>
+                                <field name="is_internal"/>
+                                <field name="legal_representative"/>
+                            </group>
+                            <group string="证照">
+                                <field name="unified_social_code"/>
+                                <field name="tax_number"/>
+                            </group>
+                        </group>
+                        <group>
+                            <group string="联系信息">
+                                <field name="address"/>
+                                <field name="contact_name"/>
+                                <field name="contact_phone"/>
+                                <field name="contact_email"/>
+                                <field name="website"/>
+                            </group>
+                            <group string="银行信息">
+                                <field name="bank_name"/>
+                                <field name="bank_branch"/>
+                                <field name="bank_account"/>
+                            </group>
+                        </group>
+                    </sheet>
+
+                    <field name="message_ids" widget="mail_thread"/>
+                </form>
+            </field>
+        </record>
+
+        <!-- ═══ Search 搜索 ═══ -->
+        <record id="view_contract_counterparty_search" model="ir.ui.view">
+            <field name="name">contract.counterparty.search</field>
+            <field name="model">contract.counterparty</field>
+            <field name="arch" type="xml">
+                <search string="搜索相对方">
+                    <field name="name"/>
+                    <field name="unified_social_code"/>
+                    <field name="party_type"/>
+                    <separator/>
+                    <filter name="company" string="公司企业" domain="[('party_type','=','company')]"/>
+                    <filter name="individual" string="个人" domain="[('party_type','=','individual')]"/>
+                    <filter name="internal" string="内部主体" domain="[('is_internal','=',True)]"/>
+                    <group expand="0" string="分组">
+                        <filter name="group_party_type" string="主体类型" context="{'group_by':'party_type'}"/>
+                    </group>
+                </search>
+            </field>
+        </record>
+
+        <!-- ═══ Act Window ═══ -->
+        <record id="action_contract_counterparty" model="ir.actions.act_window">
+            <field name="name">相对方档案</field>
+            <field name="res_model">contract.counterparty</field>
+            <field name="view_mode">tree,form</field>
+            <field name="search_view_id" ref="view_contract_counterparty_search"/>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">创建第一个相对方</p>
+                <p>在合同 AI 自动提取时，系统会自动匹配已有的相对方档案</p>
+            </field>
+        </record>
+
+    </data>
+</odoo>

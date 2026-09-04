@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- M16 · 业财一体化 — 收付款计划独立视图 + 台账 Pivot -->
+<odoo>
+    <data>
+
+        <!-- ═══ 列表视图（台账总览） ═══ -->
+        <record id="view_contract_payment_plan_tree" model="ir.ui.view">
+            <field name="name">contract.payment.plan.tree</field>
+            <field name="model">contract.payment.plan</field>
+            <field name="arch" type="xml">
+                <tree string="收付款计划" default_order="planned_date"
+                      decoration-success="state == 'paid'"
+                      decoration-info="state == 'confirmed'"
+                      decoration-danger="is_overdue == True and state not in ('paid','cancelled')"
+                      decoration-muted="state == 'cancelled'">
+                    <field name="contract_code"/>
+                    <field name="contract_name"/>
+                    <field name="contract_type"/>
+                    <field name="direction"/>
+                    <field name="sort_order"/>
+                    <field name="name"/>
+                    <field name="milestone"/>
+                    <field name="planned_date"/>
+                    <field name="planned_amount"/>
+                    <field name="actual_amount"/>
+                    <field name="actual_date"/>
+                    <field name="remaining_amount"/>
+                    <field name="state" widget="badge"/>
+                    <field name="is_overdue" invisible="1"/>
+                </tree>
+            </field>
+        </record>
+
+        <!-- ═══ 表单视图 ═══ -->
+        <record id="view_contract_payment_plan_form" model="ir.ui.view">
+            <field name="name">contract.payment.plan.form</field>
+            <field name="model">contract.payment.plan</field>
+            <field name="arch" type="xml">
+                <form string="收付款计划">
+                    <header>
+                        <button name="action_confirm" string="✓ 确认"
+                                type="object" class="btn-primary"
+                                invisible="state not in ('draft','cancelled')"/>
+                        <button name="action_done" string="✔ 标记完成"
+                                type="object"
+                                invisible="state in ('paid','cancelled')"/>
+                        <button name="action_cancel" string="✖ 取消"
+                                type="object"
+                                invisible="state in ('paid','cancelled')"/>
+                        <button name="action_reset_draft" string="重置"
+                                type="object"
+                                invisible="state in ('draft','paid')"/>
+                        <field name="state" widget="statusbar"
+                               statusbar_visible="draft,confirmed,partial,paid,cancelled"/>
+                    </header>
+
+                    <sheet>
+                        <div class="oe_title">
+                            <h1>
+                                <field name="name"/>
+                            </h1>
+                        </div>
+                        <group>
+                            <group string="所属合同">
+                                <field name="contract_id"/>
+                                <field name="contract_type" readonly="1"/>
+                                <field name="contract_code" readonly="1"/>
+                                <field name="date_signed" readonly="1"/>
+                            </group>
+                            <group string="节点信息">
+                                <field name="direction"/>
+                                <field name="milestone"/>
+                                <field name="sort_order"/>
+                            </group>
+                        </group>
+                        <group>
+                            <group string="计划">
+                                <field name="planned_date"/>
+                                <field name="planned_amount"/>
+                                <field name="currency_id" invisible="1"/>
+                            </group>
+                            <group string="实际">
+                                <field name="actual_date"/>
+                                <field name="actual_amount"/>
+                                <field name="payment_method"/>
+                            </group>
+                        </group>
+                        <group string="统计">
+                            <field name="remaining_amount"/>
+                            <field name="is_overdue"/>
+                        </group>
+                        <group>
+                            <field name="description" nolabel="1"/>
+                        </group>
+                    </sheet>
+                </form>
+            </field>
+        </record>
+
+        <!-- ═══ Pivot 视图（按合同类型汇总应收/应付台账） ═══ -->
+        <record id="view_contract_payment_plan_pivot" model="ir.ui.view">
+            <field name="name">contract.payment.plan.pivot</field>
+            <field name="model">contract.payment.plan</field>
+            <field name="arch" type="xml">
+                <pivot string="收付款台账汇总">
+                    <field name="contract_type" type="row"/>
+                    <field name="direction" type="row"/>
+                    <field name="state" type="row"/>
+                    <field name="planned_amount" type="measure"/>
+                    <field name="actual_amount" type="measure"/>
+                    <field name="remaining_amount" type="measure"/>
+                </pivot>
+            </field>
+        </record>
+
+        <!-- ═══ Graph 视图（趋势） ═══ -->
+        <record id="view_contract_payment_plan_graph" model="ir.ui.view">
+            <field name="name">contract.payment.plan.graph</field>
+            <field name="model">contract.payment.plan</field>
+            <field name="arch" type="xml">
+                <graph string="收付款计划分布" type="bar">
+                    <field name="contract_type"/>
+                    <field name="planned_amount"/>
+                </graph>
+            </field>
+        </record>
+
+        <!-- ═══ 搜索视图 ═══ -->
+        <record id="view_contract_payment_plan_search" model="ir.ui.view">
+            <field name="name">contract.payment.plan.search</field>
+            <field name="model">contract.payment.plan</field>
+            <field name="arch" type="xml">
+                <search string="搜索收付款计划">
+                    <field name="name"/>
+                    <field name="contract_code"/>
+                    <field name="contract_id"/>
+                    <separator/>
+                    <filter name="draft" string="草稿" domain="[('state','=','draft')]"/>
+                    <filter name="confirmed" string="已确认" domain="[('state','=','confirmed')]"/>
+                    <filter name="paid" string="已完成" domain="[('state','=','paid')]"/>
+                    <filter name="overdue" string="逾期" domain="[('is_overdue','=',True)]"/>
+                    <separator/>
+                    <filter name="payable" string="应付" domain="[('direction','=','payable')]"/>
+                    <filter name="receivable" string="应收" domain="[('direction','=','receivable')]"/>
+                    <separator/>
+                    <filter name="purchase" string="采购" domain="[('contract_type','=','purchase')]"/>
+                    <filter name="sale" string="销售" domain="[('contract_type','=','sale')]"/>
+                    <filter name="service" string="服务" domain="[('contract_type','=','service')]"/>
+                    <filter name="lease" string="租赁" domain="[('contract_type','=','lease')]"/>
+                    <group expand="0" string="分组">
+                        <filter name="group_type" string="合同类型"
+                                context="{'group_by':'contract_type'}"/>
+                        <filter name="group_direction" string="收/付方向"
+                                context="{'group_by':'direction'}"/>
+                        <filter name="group_state" string="状态"
+                                context="{'group_by':'state'}"/>
+                    </group>
+                </search>
+            </field>
+        </record>
+
+        <!-- ═══ Act Window：收付款计划台账 ═══ -->
+        <record id="action_contract_payment_plan" model="ir.actions.act_window">
+            <field name="name">收付款台账</field>
+            <field name="res_model">contract.payment.plan</field>
+            <field name="view_mode">tree,form,pivot,graph</field>
+            <field name="search_view_id" ref="view_contract_payment_plan_search"/>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">没有收付款计划</p>
+                <p>打开合同 → 付款计划 Tab → 点击「🤖 自动生成计划」按钮</p>
+            </field>
+        </record>
+
+    </data>
+</odoo>

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 安全组：XML ID 前缀统一为 contract_ai. -->
+<odoo>
+    <data noupdate="1">
+
+        <!-- 合同管理员 -->
+        <record id="group_contract_manager" model="res.groups">
+            <field name="name">合同管理 / 管理员</field>
+            <field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
+            <field name="comment">合同管理员：拥有合同全部权限。</field>
+        </record>
+
+        <!-- 合同普通用户 -->
+        <record id="group_contract_user" model="res.groups">
+            <field name="name">合同管理 / 普通用户</field>
+            <field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
+            <field name="comment">合同普通用户：可读写创建，不可删除。</field>
+        </record>
+
+    </data>
+</odoo>

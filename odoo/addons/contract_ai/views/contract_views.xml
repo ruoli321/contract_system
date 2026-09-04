@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 合同看板/列表/表单/搜索视图 — M3 重构后全字段对齐 -->
+<odoo>
+    <data>
+
+        <!-- ═══ Kanban 看板 ═══ -->
+        <record id="view_contract_kanban" model="ir.ui.view">
+            <field name="name">contract.contract.kanban</field>
+            <field name="model">contract.contract</field>
+            <field name="arch" type="xml">
+                <kanban default_group_by="state" class="o_kanban_small_column">
+                    <field name="name"/>
+                    <field name="code"/>
+                    <field name="type"/>
+                    <field name="amount"/>
+                    <field name="date_signed"/>
+                    <field name="state"/>
+                    <templates>
+                        <t t-name="kanban-box">
+                            <field name="state" widget="state_selection"/>
+                            <div class="o_kanban_record_headings">
+                                <strong><a type="open"><field name="name"/></a></strong>
+                                <span> <field name="code"/></span>
+                            </div>
+                            <div class="text-muted mb-2">
+                                <field name="type"/>
+                            </div>
+                            <div>
+                                <field name="partner_a"/> → <field name="partner_b"/>
+                            </div>
+                            <div class="mt-2">
+                                <strong>金额：</strong><field name="amount"/>
+                            </div>
+                            <div class="text-muted mt-2">
+                                <field name="date_signed"/>
+                            </div>
+                        </t>
+                    </templates>
+                </kanban>
+            </field>
+        </record>
+
+        <!-- ═══ List 列表 ═══ -->
+        <record id="view_contract_list" model="ir.ui.view">
+            <field name="name">contract.contract.list</field>
+            <field name="model">contract.contract</field>
+            <field name="arch" type="xml">
+                <tree string="合同台账" default_order="create_date desc">
+                    <control>
+                        <button name="%(action_contract_upload_wizard)d"
+                                string="📄 上传 PDF 并 AI 识别"
+                                type="action"
+                                class="btn-primary"
+                                icon="fa-upload"/>
+                    </control>
+                    <field name="code"/>
+                    <field name="name"/>
+                    <field name="type"/>
+                    <field name="partner_a"/>
+                    <field name="partner_b"/>
+                    <field name="amount"/>
+                    <field name="date_signed"/>
+                    <field name="state" widget="badge"/>
+                </tree>
+            </field>
+        </record>
+
+        <!-- ═══ Form 表单 ═══ -->
+        <record id="view_contract_form" model="ir.ui.view">
+            <field name="name">contract.contract.form</field>
+            <field name="model">contract.contract</field>
+            <field name="arch" type="xml">
+                <form string="合同">
+                    <header>
+                        <button name="action_ai_extract" string="🤖 AI 自动提取"
+                                type="object" class="btn-primary"/>
+                        <button name="generate_payment_plan" string="📋 自动生成计划"
+                                type="object" class="btn-secondary"
+                                invisible="state == 'draft'"/>
+                        <button name="action_export_excel" string="📤 导出 Excel"
+                                type="object" class="btn-secondary"/>
+                        <button name="action_submit_approval" string="提交审批"
+                                type="object" class="btn-primary"
+                                invisible="state != 'draft'"/>
+                        <button name="action_approve" string="审批通过"
+                                type="object" class="btn-success"
+                                invisible="state != 'approval'"/>
+                        <button name="action_reject" string="审批驳回"
+                                type="object" class="btn-danger"
+                                invisible="state != 'approval'"/>
+                        <button name="action_archive" string="归档"
+                                type="object"
+                                invisible="state != 'seal'"/>
+                        <button name="action_void" string="作废"
+                                type="object"
+                                invisible="state in ('archived', 'void')"/>
+                        <button name="action_reset_draft" string="重置为草拟"
+                                type="object"
+                                invisible="state in ('draft', 'archived', 'void')"/>
+                        <field name="state" widget="statusbar"
+                               statusbar_visible="draft,approval,seal,archived,void"/>
+                    </header>
+
+                    <notebook>
+                        <!-- Tab 1: 基本信息 -->
+                        <page string="📋 基本信息" name="basic">
+                            <group>
+                                <group>
+                                    <field name="name"/>
+                                    <field name="code"/>
+                                    <field name="type"/>
+                                    <field name="signatory_id"/>
+                                    <field name="classify_confidence" invisible="1"/>
+                                    <field name="extraction_confidence" invisible="1"/>
+                                </group>
+                                <group>
+                                    <field name="date_signed"/>
+                                    <field name="date_start"/>
+                                    <field name="date_end"/>
+                                </group>
+                            </group>
+                            <group>
+                                <group string="甲方">
+                                    <field name="partner_a"/>
+                                </group>
+                                <group string="乙方">
+                                    <field name="partner_b"/>
+                                </group>
+                            </group>
+                            <group>
+                                <group string="合同金额">
+                                    <field name="amount"/>
+                                    <field name="amount_uppercase"/>
+                                    <field name="currency_id" invisible="1"/>
+                                </group>
+                                <group string="收付款汇总">
+                                    <field name="payment_plan_count"/>
+                                    <field name="planned_amount_total"/>
+                                    <field name="paid_amount_total"/>
+                                    <field name="remaining_amount_total"/>
+                                    <field name="overdue_count"
+                                           invisible="overdue_count == 0"/>
+                                </group>
+                            </group>
+                        </page>
+
+                        <!-- Tab 2: 业务条款 -->
+                        <page string="📝 业务条款" name="terms">
+                            <group>
+                                <field name="payment_terms" widget="textarea"/>
+                            </group>
+                            <group>
+                                <field name="breach_clause" widget="textarea"/>
+                            </group>
+                            <group>
+                                <field name="dispute_resolution"/>
+                            </group>
+                        </page>
+
+                        <!-- Tab 3: 收付款计划 -->
+                        <page string="💰 收付款计划" name="payment">
+                            <group class="oe_subtotal_footer oe_right">
+                                <field name="planned_amount_total"/>
+                                <field name="paid_amount_total"/>
+                                <field name="remaining_amount_total"
+                                       style="font-weight: bold; color: #aa0000;"
+                                       invisible="remaining_amount_total == 0"/>
+                                <field name="overdue_count"
+                                       invisible="overdue_count == 0"/>
+                            </group>
+                            <field name="payment_plan_ids">
+                                <tree editable="bottom"
+                                      decoration-success="state == 'paid'"
+                                      decoration-info="state == 'confirmed'"
+                                      decoration-danger="is_overdue == True and state not in ('paid','cancelled')"
+                                      decoration-muted="state == 'cancelled'">
+                                    <field name="sort_order"/>
+                                    <field name="name"/>
+                                    <field name="milestone"/>
+                                    <field name="direction"/>
+                                    <field name="planned_date"/>
+                                    <field name="planned_amount"/>
+                                    <field name="actual_amount"/>
+                                    <field name="actual_date"/>
+                                    <field name="remaining_amount"/>
+                                    <field name="state"/>
+                                    <field name="is_overdue" invisible="1"/>
+                                    <control>
+                                        <button name="action_confirm" string="确认"
+                                                type="object" icon="fa-check"
+                                                invisible="state not in ('draft','cancelled')"/>
+                                        <button name="action_done" string="完成"
+                                                type="object" icon="fa-check-circle"
+                                                invisible="state in ('paid','cancelled')"/>
+                                        <button name="action_cancel" string="取消"
+                                                type="object" icon="fa-times"
+                                                invisible="state in ('paid','cancelled')"/>
+                                    </control>
+                                </tree>
+                            </field>
+                        </page>
+
+                        <!-- Tab 4: 合同条款 -->
+                        <page string="📜 合同条款" name="clauses">
+                            <field name="clause_ids">
+                                <tree editable="bottom">
+                                    <field name="sort_order"/>
+                                    <field name="name"/>
+                                    <field name="clause_type"/>
+                                    <field name="content"/>
+                                </tree>
+                            </field>
+                        </page>
+
+                        <!-- Tab 5: 合同元素（AI 提取） -->
+                        <page string="🧩 合同元素" name="elements">
+                            <field name="element_ids">
+                                <tree editable="bottom">
+                                    <field name="name"/>
+                                    <field name="element_key"/>
+                                    <field name="group"/>
+                                    <field name="element_type"/>
+                                    <field name="value_text"/>
+                                    <field name="confidence"/>
+                                </tree>
+                            </field>
+                        </page>
+
+                        <!-- Tab 6: 审批记录（P0-2 审批流） -->
+                        <page string="✅ 审批记录" name="approval_logs">
+                            <field name="approval_log_ids" readonly="1">
+                                <tree>
+                                    <field name="create_date"/>
+                                    <field name="approver_id"/>
+                                    <field name="action"/>
+                                    <field name="comment"/>
+                                </tree>
+                            </field>
+                        </page>
+
+                        <!-- Tab 7: 文件 -->
+                        <page string="📎 合同文件" name="files">
+                            <group>
+                                <field name="source_pdf_filename"/>
+                                <field name="source_pdf"/>
+                                <field name="ai_extracted_json" invisible="1"/>
+                            </group>
+                        </page>
+                    </notebook>
+
+                    <!-- chatter 必须放在 </notebook> 之后的 form 根级 -->
+                    <field name="message_ids" widget="mail_thread"/>
+                </form>
+            </field>
+        </record>
+
+        <!-- ═══ Search 搜索 ═══ -->
+        <record id="view_contract_search" model="ir.ui.view">
+            <field name="name">contract.contract.search</field>
+            <field name="model">contract.contract</field>
+            <field name="arch" type="xml">
+                <search string="搜索合同">
+                    <field name="name"/>
+                    <field name="code"/>
+                    <field name="partner_a"/>
+                    <field name="partner_b"/>
+                    <filter name="draft" string="草拟" domain="[('state','=','draft')]"/>
+                    <filter name="approval" string="审批中" domain="[('state','=','approval')]"/>
+                    <filter name="seal" string="已用印" domain="[('state','=','seal')]"/>
+                    <filter name="archived" string="已归档" domain="[('state','=','archived')]"/>
+                    <separator/>
+                    <filter name="purchase" string="采购合同" domain="[('type','=','purchase')]"/>
+                    <filter name="sale" string="销售合同" domain="[('type','=','sale')]"/>
+                    <filter name="service" string="服务合同" domain="[('type','=','service')]"/>
+                    <filter name="lease" string="租赁合同" domain="[('type','=','lease')]"/>
+                    <group expand="0" string="分组">
+                        <filter name="group_state" string="状态" context="{'group_by':'state'}"/>
+                        <filter name="group_type" string="类型" context="{'group_by':'type'}"/>
+                    </group>
+                </search>
+            </field>
+        </record>
+
+        <!-- ═══ Act Window（把视图绑成动作） ═══ -->
+        <record id="action_contract" model="ir.actions.act_window">
+            <field name="name">合同台账</field>
+            <field name="res_model">contract.contract</field>
+            <field name="view_mode">tree,kanban,form</field>
+            <field name="search_view_id" ref="view_contract_search"/>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">创建你的第一份合同</p>
+                <p>点击左上角 <b>📄 上传 PDF</b> 或 [新建] 按钮开始</p>
+            </field>
+        </record>
+
+    </data>
+</odoo>

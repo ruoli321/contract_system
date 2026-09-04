@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- M17 · 配置域：合同系统配置面板 -->
+<odoo>
+    <data>
+
+        <!-- ═══ Form 配置面板 ═══ -->
+        <record id="view_contract_config_form" model="ir.ui.view">
+            <field name="name">contract.config.form</field>
+            <field name="model">contract.config</field>
+            <field name="arch" type="xml">
+                <form string="合同系统配置">
+                    <header>
+                        <button name="action_save_and_apply" string="💾 保存并应用"
+                                type="object" class="btn-primary"/>
+                    </header>
+
+                    <sheet>
+                        <div class="oe_title">
+                            <h1>合同系统配置</h1>
+                            <p class="text-muted">编号规则 · 默认值 · 功能开关</p>
+                        </div>
+
+                        <!-- 分组 1：编号规则 -->
+                        <group class="oe_subtotal_footer_separator">
+                            <group string="📋 合同编号规则">
+                                <field name="code_prefix"/>
+                                <field name="code_date_format"/>
+                                <field name="code_padding"/>
+                                <field name="code_start_no"/>
+                            </group>
+                            <group string="预览">
+                                <field name="code_preview" readonly="1"
+                                       style="font-size: 16px; font-weight: bold; color: #333;"/>
+                                <p class="text-muted">
+                                    修改后点击「保存并应用」按钮使规则立即生效。<br/>
+                                    已存在的合同编号不受影响，只作用于新建合同。
+                                </p>
+                            </group>
+                        </group>
+
+                        <!-- 分组 2：默认值 -->
+                        <group class="oe_subtotal_footer_separator">
+                            <group string="⚙️ 默认值">
+                                <field name="default_currency_id"/>
+                                <field name="default_payment_method"/>
+                                <field name="default_contract_type"/>
+                            </group>
+                            <group string="AI 服务">
+                                <field name="enable_ai_extract"/>
+                                <field name="enable_auto_payment_plan"/>
+                                <field name="ai_service_url"/>
+                            </group>
+                        </group>
+                    </sheet>
+
+                    <field name="message_ids" widget="mail_thread"/>
+                </form>
+            </field>
+        </record>
+
+        <!-- ═══ Act Window ═══ -->
+        <record id="action_contract_config" model="ir.actions.act_window">
+            <field name="name">合同系统配置</field>
+            <field name="res_model">contract.config</field>
+            <field name="view_mode">form</field>
+            <field name="target">current</field>
+            <field name="limit">1</field>
+        </record>
+
+    </data>
+</odoo>

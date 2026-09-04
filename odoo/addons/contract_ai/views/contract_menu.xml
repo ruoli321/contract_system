@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- M17 菜单注册：合同管理根菜单 + 子菜单 + 配置 + 台账 -->
+<odoo>
+    <data>
+        <!-- 顶级菜单专用的 act_url action → 点击顶级菜单直接跳台账（Odoo 顶级菜单只识别 ir.actions.client/act_url，忽略 act_window） -->
+        <record id="action_contract_root_jump" model="ir.actions.act_url">
+            <field name="name">📄 合同管理</field>
+            <field name="url">/web#action=163&amp;model=contract.contract</field>
+            <field name="target">self</field>
+        </record>
+
+        <!-- 顶级菜单（action=act_url，点击立即跳台账；子菜单作为二级导航保留） -->
+        <menuitem id="menu_contract_root"
+                  name="📄 合同管理"
+                  action="action_contract_root_jump"
+                  sequence="10"/>
+
+        <!-- 子菜单 0：📋 合同台账（seq=5 保证是第一个子菜单，点击顶级跳台账后它高亮） -->
+        <menuitem id="menu_contract_list"
+                  name="📋 合同台账"
+                  parent="menu_contract_root"
+                  action="action_contract_ledger"
+                  sequence="5"/>
+
+        <!-- 子菜单 1：📄 上传 PDF 并 AI 识别（M18 快捷入口） -->
+        <menuitem id="menu_contract_upload"
+                  name="📄 上传 PDF · AI 识别"
+                  parent="menu_contract_root"
+                  action="action_contract_upload_wizard"
+                  sequence="50"/>
+
+        <!-- 子菜单 2：相对方档案 -->
+        <menuitem id="menu_contract_counterparty"
+                  name="相对方档案"
+                  parent="menu_contract_root"
+                  action="action_contract_counterparty"
+                  sequence="20"/>
+
+        <!-- 子菜单 3：签约方档案 -->
+        <menuitem id="menu_contract_signatory"
+                  name="签约方档案"
+                  parent="menu_contract_root"
+                  action="action_contract_signatory"
+                  sequence="30"/>
+
+        <!-- 子菜单 4：合同模板 -->
+        <menuitem id="menu_contract_template"
+                  name="合同模板"
+                  parent="menu_contract_root"
+                  action="action_contract_template"
+                  sequence="40"/>
+
+        <!-- 子菜单 5：收付款台账（M16） -->
+        <menuitem id="menu_contract_payment_plan"
+                  name="💰 收付款台账"
+                  parent="menu_contract_root"
+                  action="action_contract_payment_plan"
+                  sequence="50"/>
+
+        <!-- 子菜单 6：合同系统配置（M17） -->
+        <menuitem id="menu_contract_config"
+                  name="⚙️ 系统配置"
+                  parent="menu_contract_root"
+                  action="action_contract_config"
+                  sequence="100"/>
+    </data>
+</odoo>

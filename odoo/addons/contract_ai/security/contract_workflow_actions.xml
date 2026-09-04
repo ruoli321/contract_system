@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ═══════════════════════════════════════════════════════════════
+     P0-2 · 审批流服务端动作（ir.actions.server）
+     ⚠️ Odoo 17 已删除 workflow/workflow.activity/workflow.transition，
+        审批动作必须用 ir.actions.server 绑定到表单"动作"菜单实现。
+     三个动作均委托给 contract.contract 上的对象方法（单一业务逻辑源），
+     方法内部完成：状态校验 → 状态流转 → contract.approval.log 落库 → chatter。
+     ═══════════════════════════════════════════════════════════════ -->
+<odoo>
+    <data noupdate="1">
+
+        <!-- 动作 1：提交审批（draft → approval） -->
+        <record id="action_contract_submit" model="ir.actions.server">
+            <field name="name">合同：提交审批</field>
+            <field name="model_id" ref="model_contract_contract"/>
+            <field name="binding_model_id" ref="model_contract_contract"/>
+            <field name="binding_view_types">form</field>
+            <field name="state">code</field>
+            <field name="code">record.action_submit_approval()</field>
+        </record>
+
+        <!-- 动作 2：审批通过（approval → seal） -->
+        <record id="action_contract_approve" model="ir.actions.server">
+            <field name="name">合同：审批通过</field>
+            <field name="model_id" ref="model_contract_contract"/>
+            <field name="binding_model_id" ref="model_contract_contract"/>
+            <field name="binding_view_types">form</field>
+            <field name="state">code</field>
+            <field name="code">record.action_approve()</field>
+        </record>
+
+        <!-- 动作 3：审批驳回（approval → draft） -->
+        <record id="action_contract_reject" model="ir.actions.server">
+            <field name="name">合同：审批驳回</field>
+            <field name="model_id" ref="model_contract_contract"/>
+            <field name="binding_model_id" ref="model_contract_contract"/>
+            <field name="binding_view_types">form</field>
+            <field name="state">code</field>
+            <field name="code">record.action_reject()</field>
+        </record>
+
+    </data>
+</odoo>

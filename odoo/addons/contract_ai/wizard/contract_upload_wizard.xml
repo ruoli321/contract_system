@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- PDF 上传向导 — M18 一键上传入口 -->
+<odoo>
+    <data>
+
+        <!-- ═══ 向导模型视图 ═══ -->
+        <record id="view_contract_upload_wizard_form" model="ir.ui.view">
+            <field name="name">contract.upload.wizard.form</field>
+            <field name="model">contract.upload.wizard</field>
+            <field name="arch" type="xml">
+                <form string="📄 上传 PDF 并 AI 识别">
+                    <group>
+                        <label for="pdf_file"/>
+                        <div>
+                            <field name="pdf_file" widget="binary"
+                                   filename="pdf_filename"/>
+                            <field name="pdf_filename" invisible="1"/>
+                            <div class="text-muted mt-2">
+                                支持 PDF 格式，最大 10MB。<br/>
+                                上传后 AI 将自动：分类合同类型 → 提取全部字段 → 生成收付款计划。
+                            </div>
+                        </div>
+                    </group>
+                    <footer>
+                        <button name="action_create_and_extract"
+                                string="🚀 开始识别"
+                                type="object"
+                                class="btn-primary"
+                                icon="fa-magic"/>
+                        <button name="action_cancel"
+                                string="取消"
+                                type="object"
+                                class="btn-secondary"/>
+                    </footer>
+                </form>
+            </field>
+        </record>
+
+        <!-- ═══ Act Window（注册向导为动作） ═══ -->
+        <record id="action_contract_upload_wizard" model="ir.actions.act_window">
+            <field name="name">📄 上传 PDF 并 AI 识别</field>
+            <field name="res_model">contract.upload.wizard</field>
+            <field name="view_mode">form</field>
+            <field name="target">new</field>
+        </record>
+
+    </data>
+</odoo>
