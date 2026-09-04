@@ -1,0 +1,8 @@
+请从以下合同文本中提取关键字段。
+
+合同文本：
+{contract_text}
+
+{few_shot_examples}
+
+请输出 JSON：

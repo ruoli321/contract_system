@@ -1,0 +1,44 @@
+# ═══════════════════════════════════════════
+# 合同 AI 服务 - 依赖清单
+# 用范围版本（>=）让 pip 自己解决依赖冲突，避免锁死不存在的版本
+# ═══════════════════════════════════════════
+
+# ── 核心运行：FastAPI 后端 ──
+fastapi>=0.110
+uvicorn[standard]>=0.27
+python-multipart>=0.0.9
+pydantic>=2.6
+pydantic-settings>=2.2
+python-dotenv>=1.0
+
+# ── M6 · PDF 解析分流 ──
+# pypdf 替代 PyPDF2（更活跃、兼容 pypdf2 API）
+pypdf>=4.0
+pdfplumber>=0.11
+
+# ── OCR 管线依赖 ──
+# PyMuPDF（fitz）: PDF → 图片渲染，比 pdf2image + poppler 快 3-5x
+PyMuPDF>=1.24
+# OpenCV: 图像预处理（灰度、去噪、二值化、纠偏）
+opencv-python>=4.9
+# PaddleOCR: 文字识别 + PP-Structure 表格识别
+paddlepaddle>=3.0
+paddleocr>=3.0
+Pillow>=10.0
+numpy>=1.26,<2.0
+
+# ── AI 核心：LangChain + LangGraph + Chroma ──
+langchain>=0.3,<2.0
+langchain-core>=0.3
+langchain-community>=0.3
+langgraph>=0.2
+# Chroma 客户端版本必须与服务端镜像 (chromadb/chroma:0.5.20) 严格一致，
+# 否则 HTTP API 协议不兼容（1.x 客户端会发带 _type 字段的请求，0.x 服务端不认）
+chromadb==0.5.20
+sentence-transformers>=3.0
+
+# ── LLM 接入（OpenAI 兼容，通义千问/Anthropic/GPT 三选一）──
+langchain-openai>=0.1
+
+# ── 工具库 ──
+typing-extensions>=4.9

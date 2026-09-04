@@ -1,0 +1,90 @@
+{
+  "_comment": "合同系统字段字典：提示词中引用的所有枚举、字段定义、校验规则都集中在此文件。值变更时只需改这一个文件，提示词模板中通过 {field_dict.contract_type} 等引用。",
+
+  "contract_type": {
+    "description": "合同类型枚举（分类模块和提取模块的约束）",
+    "values": ["采购合同", "销售合同", "服务合同", "租赁合同", "其他"],
+    "patterns": ["采购", "需方", "供应商", "销售", "供方", "客户", "服务", "咨询", "技术", "劳务", "租赁", "承租"]
+  },
+
+  "dispute_resolution": {
+    "description": "争议解决方式枚举",
+    "values": ["向人民法院提起诉讼", "提交仲裁委员会仲裁", "协商解决", "调解解决"],
+    "arbitration_clause": "仲裁条款通常包含仲裁机构名称，如'XX仲裁委员会'或'XX国际经济贸易仲裁委员会'"
+  },
+
+  "payment_method": {
+    "description": "付款方式/付款条件枚举",
+    "values": ["银行转账", "电汇(T/T)", "信用证(L/C)", "汇票", "现金"],
+    "common_patterns": [
+      "30%预付款 + 60%验收款 + 10%质保金",
+      "月结30天",
+      "货到付款",
+      "分期付款",
+      "一次性付款"
+    ]
+  },
+
+  "currency": {
+    "description": "货币代码枚举",
+    "values": ["CNY", "USD", "EUR", "GBP", "HKD", "JPY"],
+    "symbols": {
+      "CNY": ["元", "人民币", "¥", "RMB"],
+      "USD": ["美元", "$", "USD"],
+      "EUR": ["欧元", "€", "EUR"],
+      "GBP": ["英镑", "£", "GBP"],
+      "HKD": ["港币", "HK$", "HKD"],
+      "JPY": ["日元", "¥", "JPY"]
+    }
+  },
+
+  "party_role": {
+    "description": "合同甲乙方角色映射（提取时用于判断哪方是买方/卖方）",
+    "keys": {
+      "买方": ["买方", "采购方", "需方", "甲方（买方）", "购货方"],
+      "卖方": ["卖方", "供方", "销售方", "乙方（卖方）", "供货方"],
+      "出租方": ["出租方", "甲方（出租方）"],
+      "承租方": ["承租方", "乙方（承租方）"],
+      "委托方": ["委托方", "甲方（委托方）"],
+      "受托方": ["受托方", "服务方", "乙方（服务方）"]
+    }
+  },
+
+  "date_format": {
+    "description": "日期输出格式约定",
+    "preferred": "YYYY-MM-DD",
+    "examples": ["2025-03-15", "2024-12-01"],
+    "patterns_in_text": [
+      "2024年12月1日", "2024-12-1", "2024/12/1", "二〇二四年十二月一日"
+    ]
+  },
+
+  "amount_format": {
+    "description": "金额输出格式约定",
+    "unit": "元",
+    "precision": 2,
+    "examples": ["1280000.00", "50000.00"],
+    "notes": "只填数字，不要千分位，不要货币符号"
+  },
+
+  "extract_schema": {
+    "description": "合同字段提取输出 Schema（与 system_prompt 中的 JSON Schema 保持同步）",
+    "fields": {
+      "contract_name": { "type": "string|null", "required": true, "desc": "合同标题/名称" },
+      "contract_code": { "type": "string|null", "required": false, "desc": "合同编号" },
+      "partner_a": { "type": "string|null", "required": true, "desc": "甲方全称" },
+      "partner_b": { "type": "string|null", "required": true, "desc": "乙方全称" },
+      "amount": { "type": "number|null", "required": false, "desc": "合同总金额" },
+      "amount_uppercase": { "type": "string|null", "required": false, "desc": "金额大写（如 人民币壹佰贰拾捌万元整）" },
+      "currency": { "type": "string|null", "required": false, "desc": "货币代码 CNY/USD 等" },
+      "sign_date": { "type": "string|null", "required": false, "desc": "签订日期 YYYY-MM-DD" },
+      "effective_date": { "type": "string|null", "required": false, "desc": "生效日期" },
+      "expire_date": { "type": "string|null", "required": false, "desc": "到期日期" },
+      "contract_type": { "type": "enum", "required": true, "values": "contract_type.values", "desc": "合同类型" },
+      "payment_terms": { "type": "string|null", "required": false, "desc": "付款条款摘要" },
+      "breach_clause": { "type": "string|null", "required": false, "desc": "违约责任摘要" },
+      "dispute_resolution": { "type": "string|null", "required": false, "desc": "争议解决方式" },
+      "confidence": { "type": "number", "required": true, "desc": "整体置信度 0-1" }
+    }
+  }
+}
