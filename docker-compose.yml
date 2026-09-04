@@ -1,0 +1,156 @@
+# ═══════════════════════════════════════════════════════════════════════
+# 合同管理系统 — Docker Compose
+# 四个服务：PostgreSQL + Odoo 17 CE + FastAPI AI 服务 + Chroma 向量库
+# ═══════════════════════════════════════════════════════════════════════
+
+# ── 网络 ──────────────────────────────────────────────────────────────
+# 所有服务在同一 bridge 网络，容器间通过服务名互访
+networks:
+  contract-net:
+    driver: bridge
+
+# ── 卷 ────────────────────────────────────────────────────────────────
+volumes:
+  odoo_db_data:        # PostgreSQL 数据库文件
+  odoo_data:           # Odoo 文件存储（附件、会话等）
+  chroma_data:         # Chroma 向量库持久化数据
+  odoo_logs:           # Odoo 日志持久化
+
+# ═══════════════════════════════════════════════════════════════════════
+# 服务定义
+# ═══════════════════════════════════════════════════════════════════════
+
+services:
+  # ── 1. PostgreSQL：Odoo 唯一依赖的关系型数据库 ──────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: contract-postgres
+    restart: unless-stopped
+    networks:
+      - contract-net
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-odoo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-odoo}
+      POSTGRES_DB: postgres
+    volumes:
+      - odoo_db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-odoo}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # ── 2. Chroma：独立向量数据库（AI 服务通过 HTTP 访问）─────────────────
+  # 镜像选择（二选一，国内推荐第 2 个，Docker Hub 可能超时）：
+  #   A) chromadb/chroma:latest                  ← Docker Hub 官方（需要能访问 Docker Hub）
+  #   B) ghcr.io/chroma-core/chroma:0.5.20       ← GitHub Container Registry（本地已有）
+  # 容器内部端口 8000，宿主机映射到 8001（避免与 ai-service 的 8000 冲突）
+  chroma:
+    image: ghcr.io/chroma-core/chroma:0.5.20
+    container_name: contract-chroma
+    restart: unless-stopped
+    networks:
+      - contract-net
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - ANONYMIZED_TELEMETRY=${CHROMA_TELEMETRY:-True}
+    ports:
+      - "8001:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v2/heartbeat')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ── 3. AI 微服务（FastAPI + LangChain + PaddleOCR）────────────────────
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: contract-ai
+    restart: unless-stopped
+    networks:
+      - contract-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      chroma:
+        condition: service_started
+    ports:
+      - "${AI_PORT:-8000}:8000"
+    volumes:
+      - ./ai-service/app:/app/app
+      - ./ai-service/examples:/app/examples
+      - ./ai-service/prompts:/app/prompts
+      - ./ai-service/scripts:/app/scripts
+      # 合同原文目录（test_pdfs 是项目根目录下的 txt 文件，供 load_examples() 自动发现）
+      - ./test_pdfs:/test_pdfs:ro
+      # HuggingFace 模型缓存（宿主机下载 → 容器离线可用，避免每次重建都重下）
+      # Windows: C:\Users\<user>\.cache\huggingface\hub → 容器内 /root/.cache/huggingface/hub
+      - ${HF_CACHE_HOST:-C:/Users/ruoli/.cache/huggingface/hub}:/root/.cache/huggingface/hub:ro
+    environment:
+      # ── Chroma 连接（容器间用内部端口 8000，宿主机映射到 8001）──
+      - CHROMA_HOST=chroma
+      - CHROMA_PORT=8000
+      # ── HuggingFace 离线模式（模型已通过 volume 挂载）──
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      # ── LLM 配置 ──
+      - LLM_PROVIDER=${LLM_PROVIDER:-qwen}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      - LLM_MODEL=${LLM_MODEL:-qwen-plus}
+      # ── Embedding 配置（默认 bge-small-zh-v1.5 512d，有缓存，加载快）──
+      # 可选: BAAI/bge-base-zh-v1.5 (768d) / BAAI/bge-large-zh-v1.5 (1024d, 需单独下载)
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-BAAI/bge-small-zh-v1.5}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-512}
+      # ── 日志 ──
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # ── 范例数据路径（容器内路径）──
+      - ANNOTATIONS_DIR=/app/examples/annotations
+      - TEST_PDFS_DIR=/test_pdfs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ── 4. Odoo 17 CE：业务平台（只写 addons，不改源码）───────────────────
+  odoo:
+    image: odoo:17.0
+    container_name: contract-odoo
+    restart: unless-stopped
+    networks:
+      - contract-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ai-service:
+        condition: service_started
+    ports:
+      - "${ODOO_PORT:-8069}:8069"
+    volumes:
+      - odoo_data:/var/lib/odoo
+      - ./odoo/addons:/mnt/extra-addons:ro        # 自定义模块只读挂载
+      - ./odoo/config/odoo.conf:/etc/odoo/odoo.conf:ro
+      - odoo_logs:/var/log/odoo                    # 日志持久化
+    environment:
+      HOST: postgres
+      PORT: 5432
+      USER: ${POSTGRES_USER:-odoo}
+      PASSWORD: ${POSTGRES_PASSWORD:-odoo}
+      # ── 让 Odoo 能调 AI 服务 ──
+      AI_SERVICE_URL: http://ai-service:8000
+    healthcheck:
+      # Odoo 官方镜像自带 curl，检查登录页是否可访问
+      test: ["CMD", "curl", "-sf", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:8069/web/login"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s

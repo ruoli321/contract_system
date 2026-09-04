@@ -1,0 +1,33 @@
+# ═══════════════════════════════════════════
+# .gitignore — 合同管理系统
+# ═══════════════════════════════════════════
+
+# ── 环境变量 ──
+.env
+.env.local
+
+# ── Docker 卷数据 ──
+chroma_data/
+odoo_data/
+__pycache__/
+*.pyc
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── Python ──
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# ── Odoo ──
+odoo/logs/
