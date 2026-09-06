@@ -29,6 +29,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .config import get_settings
+from .services.payment_schedule import parse_payment_terms
+from .services.chinese_amount import chinese_uppercase_to_amount
+from .services.clause_segmenter import segment_clauses, build_elements
 
 # ── 日志 ──
 logging.basicConfig(
@@ -76,8 +79,10 @@ async def lifespan(app: FastAPI):
     from .services.rag_learner import RAGLearner
 
     # ── 无 LLM 依赖，直接初始化 ──
-    _services["pdf_parser"] = PdfProcessor()
-    logger.info("  ✅ PDF Parser 就绪")
+    _services["pdf_parser"] = PdfProcessor(
+        enable_table_detect=settings.ocr_enable_table_detect,
+    )
+    logger.info("  ✅ PDF Parser 就绪 | 表格识别: %s", "开" if settings.ocr_enable_table_detect else "关（OCR_ENABLE_TABLE_DETECT=1 可开启）")
 
     _services["prompt_manager"] = PromptManager(prompts_dir=settings.prompts_dir)
     logger.info(f"  ✅ Prompt Manager 就绪 | 版本: {_services['prompt_manager'].current_version}")
@@ -435,6 +440,31 @@ async def extract(
         )
         extract_data = extract_result.to_api_dict()
 
+        # B5 业财一体化：付款条款 → 收付款计划节点（规则解析，Odoo 侧据此自动生成计划）
+        payment_schedule = parse_payment_terms(
+            extract_data.get("payment_terms") or ""
+        )
+        extract_data["payment_schedule"] = payment_schedule
+
+        # B1 大写金额交叉校验：amount_uppercase ↔ amount 语义等价性检查
+        amount_check = None
+        if extract_data.get("amount_uppercase"):
+            upper_val = chinese_uppercase_to_amount(extract_data["amount_uppercase"])
+            if upper_val is not None:
+                amount_check = {
+                    "uppercase_as_number": upper_val,
+                    "extracted_amount": extract_data.get("amount"),
+                    "match": (
+                        extract_data.get("amount") is None
+                        or abs(upper_val - extract_data["amount"]) < 0.01
+                    ),
+                }
+        extract_data["amount_cross_check"] = amount_check
+
+        # 合同条款分段 + 元素结构化（规则式，零 LLM 成本；Odoo 侧据此自动生成条款/元素记录）
+        clauses = segment_clauses(text)
+        elements = build_elements(extract_data, text, clauses)
+
         # 补充 classify 结果到同一响应
         data = {
             "filename": file.filename,
@@ -445,6 +475,8 @@ async def extract(
             },
             "classify": classify_data,
             "extraction": extract_data,
+            "clauses": clauses,
+            "elements": elements,
         }
 
         elapsed = (time.time() - t0) * 1000
@@ -452,6 +484,7 @@ async def extract(
             f"  ✅ 全流程完成 | type={effective_ctype} | "
             f"conf={extract_result.confidence:.2f} | "
             f"attempts={extract_result.attempt_count} | rag={extract_result.used_rag} | "
+            f"clauses={len(clauses)} | elements={len(elements)} | "
             f"{elapsed:.0f}ms"
         )
         return _ok(data, elapsed_ms=elapsed)

@@ -15,6 +15,7 @@ volumes:
   odoo_data:           # Odoo 文件存储（附件、会话等）
   chroma_data:         # Chroma 向量库持久化数据
   odoo_logs:           # Odoo 日志持久化
+  paddle_models:       # PaddleX/PaddleOCR 模型缓存（避免每次 run 重新下载 ~250MB）
 
 # ═══════════════════════════════════════════════════════════════════════
 # 服务定义
@@ -93,6 +94,10 @@ services:
       # HuggingFace 模型缓存（宿主机下载 → 容器离线可用，避免每次重建都重下）
       # Windows: C:\Users\<user>\.cache\huggingface\hub → 容器内 /root/.cache/huggingface/hub
       - ${HF_CACHE_HOST:-C:/Users/ruoli/.cache/huggingface/hub}:/root/.cache/huggingface/hub:ro
+      # PaddleOCR/PaddleX 模型缓存（命名卷持久化，首次 OCR 自动下载后复用）
+      - paddle_models:/root/.paddlex
+      # 评估/对比报告输出（宿主机 ai-service/reports 目录）
+      - ./ai-service/reports:/app/reports
     environment:
       # ── Chroma 连接（容器间用内部端口 8000，宿主机映射到 8001）──
       - CHROMA_HOST=chroma

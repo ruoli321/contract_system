@@ -37,10 +37,22 @@ class Settings(BaseSettings):
     prompts_dir: str = Field(default="./prompts", description="提示词模板目录")
     current_prompt_version: str = Field(default="v1", description="当前提示词版本")
 
+    # ── OCR 配置 ──
+    # PP-Structure 表格识别默认关闭：它在 CPU 上每页多花 30s+，且普通合同
+    # 靠 LLM 提取字段并不需要表格结构。表格密集型合同可设 OCR_ENABLE_TABLE_DETECT=1。
+    ocr_enable_table_detect: bool = Field(
+        default=False,
+        description="是否启用 PP-Structure 表格识别（CPU 上显著变慢，表格密集合同才开启）",
+    )
+
     # ── 服务 ──
     log_level: str = Field(default="INFO", description="日志级别")
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    # .env 查找顺序：ai-service 本地 → 仓库根（本地跑脚本时 key 在根 .env；
+    # 容器内两个都不存在，由 compose environment 注入，pydantic 对缺失文件静默跳过）
+    # extra=ignore：根 .env 含 ODOO_PORT 等 Odoo 专属变量，需忽略
+    model_config = {"env_file": (".env", "../.env"), "env_file_encoding": "utf-8",
+                    "extra": "ignore"}
 
 
 @lru_cache

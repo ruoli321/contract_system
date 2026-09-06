@@ -3,7 +3,6 @@
 # ════════════════════════════════════════════════
 import base64
 import logging
-import requests
 
 from odoo import models, fields, api, _
 from odoo.exceptions import UserError
@@ -18,9 +17,12 @@ class ContractUploadWizard(models.TransientModel):
     使用流程:
       1. 用户在合同台账列表页点击「📄 上传 PDF 并 AI 提取」按钮
       2. 在向导里选择 PDF 文件
-      3. 点击「开始识别」→ 自动创建 contract.contract 记录
-      4. 自动调用 AI 服务的 /api/contract/extract
-      5. 成功后跳转到新建合同的表单视图
+      3. 点击「开始识别」→ 立即创建 contract.contract 记录并跳转表单
+      4. 后台线程异步调用 AI 服务 /api/contract/extract（扫描件 OCR 约 1~2 分钟）
+      5. 识别完成后字段自动回填 + chatter 通知
+
+    ⚠️ 为什么异步：扫描版 PDF 走 OCR + LLM 全流程约 60~120 秒，
+       同步等待会撞 requests 超时和 Odoo worker 限制，导致识别失败。
     """
 
     _name = "contract.upload.wizard"
@@ -33,10 +35,10 @@ class ContractUploadWizard(models.TransientModel):
     )
     pdf_filename = fields.Char(string="文件名")
 
-    # ── 主方法：创建合同 + AI 提取 ──
+    # ── 主方法：创建合同 + 后台异步 AI 提取 ──
     def action_create_and_extract(self):
         """
-        一键完成：创建草稿合同 → 上传 PDF → 调 AI → 跳表单
+        一键完成：创建草稿合同 → 上传 PDF → 后台异步调 AI → 跳表单
         """
         self.ensure_one()
         if not self.pdf_file:
@@ -56,45 +58,17 @@ class ContractUploadWizard(models.TransientModel):
         contract = self.env["contract.contract"].sudo().create(contract_vals)
         _logger.info("向导创建合同: id=%s, name=%s", contract.id, contract.name)
 
-        # ── Step 2: 调 AI 服务提取 ──
-        try:
-            ai_url = contract._get_ai_service_url()
-            files = {"file": (self.pdf_filename or "contract.pdf", pdf_bytes)}
-            resp = requests.post(
-                f"{ai_url}/api/contract/extract", files=files, timeout=60,
-            )
-            if resp.status_code != 200:
-                _logger.warning("AI 提取失败 (HTTP %s): %s", resp.status_code, resp.text)
-                contract.message_post(
-                    body=_("⚠️ AI 自动提取失败 (HTTP %s)，请手动填写") % resp.status_code,
-                    subtype_id=self.env.ref("mail.mt_comment").id,
-                )
-            else:
-                raw = resp.json()
-                # ⚠️ AI 服务返回统一格式 {"success": true, "data": {...}, ...}
-                if raw.get("success"):
-                    data = raw.get("data", raw)
-                    contract._apply_ai_result(data)
-                else:
-                    contract.message_post(
-                        body=_("⚠️ AI 提取服务返回错误: %s") % raw.get("error", {}).get("message", "-"),
-                        subtype_id=self.env.ref("mail.mt_comment").id,
-                    )
-
-        except requests.exceptions.ConnectionError as e:
-            _logger.error("AI 服务连接失败: %s", e)
-            contract.message_post(
-                body=_("⚠️ 无法连接 AI 服务，请检查 AI 服务是否启动"),
-                subtype_id=self.env.ref("mail.mt_comment").id,
-            )
-        except Exception as e:
-            _logger.exception("AI 提取过程异常")
-            contract.message_post(
-                body=_("⚠️ AI 提取异常: %s") % str(e),
-                subtype_id=self.env.ref("mail.mt_comment").id,
-            )
+        # ── Step 2: 后台线程异步调 AI 提取（立即返回，不阻塞浏览器）──
+        contract.message_post(
+            body=_("🚀 已提交 AI 识别：正在后台解析与提取（扫描件约 1~2 分钟），"
+                   "完成后字段自动回填，可稍后刷新查看"),
+            subtype_id=self.env.ref("mail.mt_comment").id,
+        )
+        contract._spawn_ai_extraction()
 
         # ── Step 3: 跳转到新建合同的表单视图 ──
+        # ⚠️ 必须返回单个 action dict：Odoo 17 前端 doAction 不接受 action 数组，
+        #    返回 list 会导致跳转失败、页面空白（用户误以为上传失败）
         return {
             "type": "ir.actions.act_window",
             "res_model": "contract.contract",

@@ -94,6 +94,15 @@ class ContractClause(models.Model):
     sort_order = fields.Integer(string="排序", default=10)
 
     # ── 条款属性 ──
+    source = fields.Selection(
+        [
+            ("manual", "人工录入"),
+            ("ai_extracted", "AI 提取"),
+            ("template", "模板"),
+        ],
+        string="来源", default="manual", index=True, copy=False,
+        help="记录条款来源：AI 自动提取的条款在重新识别时会被覆盖，人工/模板条款不受影响",
+    )
     is_required = fields.Boolean(
         string="必备条款", default=False,
         help="模板中标记为必备的条款在应用到合同时不可删除",

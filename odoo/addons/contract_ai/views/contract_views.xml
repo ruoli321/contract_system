@@ -106,10 +106,18 @@
                         <page string="📋 基本信息" name="basic">
                             <group>
                                 <group>
-                                    <field name="name"/>
+                                    <!-- 条件必填：手动新建（无 AI 流程）必须填名称；
+                                         PDF 上传后识别期间允许为空，AI 完成后自动回填 -->
+                                    <field name="name" required="not ai_extract_status"/>
                                     <field name="code"/>
                                     <field name="type"/>
                                     <field name="signatory_id"/>
+                                    <field name="ai_extract_status" widget="badge"
+                                           decoration-muted="ai_extract_status == 'draft'"
+                                           decoration-info="ai_extract_status == 'running'"
+                                           decoration-success="ai_extract_status == 'success'"
+                                           decoration-danger="ai_extract_status == 'failed'"/>
+                                    <field name="ai_extract_error" invisible="ai_extract_status != 'failed'"/>
                                     <field name="classify_confidence" invisible="1"/>
                                     <field name="extraction_confidence" invisible="1"/>
                                 </group>
@@ -222,6 +230,7 @@
                                     <field name="element_type"/>
                                     <field name="value_text"/>
                                     <field name="confidence"/>
+                                    <field name="source" optional="hide"/>
                                 </tree>
                             </field>
                         </page>
@@ -242,7 +251,8 @@
                         <page string="📎 合同文件" name="files">
                             <group>
                                 <field name="source_pdf_filename"/>
-                                <field name="source_pdf"/>
+                                <field name="source_pdf"
+                                       help="上传 PDF 后请先点击 💾 保存记录，再点击顶部「🤖 AI 自动提取」按钮发起识别"/>
                                 <field name="ai_extracted_json" invisible="1"/>
                             </group>
                         </page>

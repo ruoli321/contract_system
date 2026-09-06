@@ -279,6 +279,52 @@ curl -X POST http://localhost:8000/api/contract/extract \
 
 > 完整 Markdown 报告见 `ai-service/reports/m15_evaluation_*.md`
 
+真实 LLM（DeepSeek）评估：字段准确率 **86.25% → 98.75%（+12.5 pp）**，4 项 RAGAS 指标同步提升（见 `reports/m15_evaluation_20260904_155526.md`）。
+
+## 🔍 PDF OCR 场景选型（考核 E）
+
+**核心思想：不是无脑 OCR，按 PDF 类型工程化分流。**
+
+| 场景 | 管线选型 | 实现 |
+|------|---------|------|
+| 文字版 PDF（有文本层） | pdfplumber 直接抽取，**不做 OCR** | `PdfProcessor._text_pipeline` |
+| 扫描件/图片型 PDF | PyMuPDF 渲染 300dpi → OpenCV 预处理 → PaddleOCR | `PdfProcessor._ocr_pipeline` |
+| 复杂表格/歪斜/脏污 | Hough 直线检测自动纠偏（`_deskew`）+ 自适应二值化去噪（`_preprocess_image`）+ PP-Structure/PPStructureV3 表格识别 | 表格输出 HTML + 二维数组 |
+| 分流判定 | pypdf/pdfplumber 检测文本层字符数：<50 判扫描件，50-100 判混合 | `PdfProcessor.detect_type` |
+
+文字版 vs 扫描版同源对比实验（`scripts/test_ocr_comparison.py`，合成扫描件 200dpi）：
+文字版相似度 **100%** / 耗时 0.1s；扫描版走 OCR 管线可恢复关键字段，但字符级损耗与耗时显著更高 →
+**证明"文字版直抽、扫描件才 OCR"的选型是工程决策而非人肉**。完整报告见 `ai-service/reports/ocr_comparison_*.md`。
+
+## 🧠 原理讲解（考核 F：结合本项目讲透 Transformer 与向量库）
+
+### 1. 文本如何变成向量
+
+Tokenization 把条款文本切成 token 序列 → Transformer Encoder 逐层 self-attention 编码上下文 → 取 [CLS]/均值池化得到定长向量。
+本项目用 `BAAI/bge-small-zh-v1.5`（512 维）：一条付款条款进 Embedding 模型后变成 512 个浮点数，**维度里存的是"语义坐标"**——
+"合同签订后支付 30% 预付款"和"签约后 5 日内付三成"字面不同，但语义坐标距离很近，这就是向量检索能跨措辞匹配的原因。
+
+### 2. Attention 一句话直觉 + 余弦相似度
+
+Attention = **每个 token 用 Q（我在找什么）与所有 token 的 K（我有什么）做点积打分，再加权求和 V（实际内容）**——让"金额"这个词的表示吸收上下文中"伍拾万元整"的信息。
+余弦相似度度量两个向量夹角：本项目里"采购合同"与"购销协议"语义坐标夹角小（相似度 ≈0.9+），与"员工手册"近乎正交（≈0.2）——
+分类模块（M11）的关键词规则给出可解释基线，LLM 语义分类给出泛化判断，两者融合正是"符号 + 向量"双通道。
+
+### 3. 全链路白板推演（对应本项目数据流）
+
+```
+PDF 上传 → PdfProcessor 分流（文字版直抽 / 扫描件 OCR）
+        → chunker 按条款语义切块（非无脑 500 字硬切，保留"第X条"结构标签）
+        → bge Embedding 512 维向量化
+        → Chroma 入库（HNSW 近似最近邻索引，O(logN) 检索）
+新合同 → 向量化 → 相似检索 top_k=3 金标准范例
+        → 范例（输入文本+标准提取结果）作为 few-shot 回填 Prompt
+        → LLM 结构化提取（JSON Schema 约束）→ Pydantic 校验 → 正则兜底
+        → Odoo 入库 → 付款计划自动生成（业财一体化）
+```
+
+M15 对比实验证明此链路有效：离线对比 few-shot 使字段准确率 86.25% → 98.75%（+12.5pp）；真实 LLM（DeepSeek）盲测 20 份金标准达 99.58%。
+
 ## 🧪 测试
 
 ### pytest 单元测试（本地跑）

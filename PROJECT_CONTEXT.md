@@ -1,7 +1,7 @@
 # PROJECT_CONTEXT.md — 项目记忆文件
 
 > 本文件由 AI 自动生成，后续开发过程中需及时更新。
-> 最后更新：2026-09-01（M18 工程化交付完成；94 项 pytest 全通过；chunker.py 正则 bug 修复；中文日期解析增强；README 全量重写含 Mermaid 架构图；run_accuracy_test.py + demo_script.py 新建）
+> 最后更新：2026-09-04（P1-4 认证标准补齐：付款计划解析器 + 中文大写金额互验 + PaddleOCR 3.x 推理修复（enable_mkldnn=False）+ 纠偏接入 + paddle_models 持久卷 + README 补 E/F 章节；128 项 pytest 全通过）
 
 ---
 
@@ -502,6 +502,20 @@ curl http://localhost:8000/api/health         # AI 服务健康检查（显示 p
 | **集成点** | extractor.py：_business_validate() 之后、return 之前调用 postprocess_fill；fallback 路径同样接入 |
 | **关键修复** | 金额前缀 `人民币?` → `(?:人民币)?`（量词只作用于"币"字导致"合同总价：500,000 元"漏配） |
 
+### P1-4 · 认证考核标准补齐 ✅
+
+| 项 | 内容 |
+|----|------|
+| **状态** | ✅ 128 项 pytest 全通过（114 + 14 新增）；端到端真实提取验证通过（分类 conf 0.98、金额大写互验、few-shot 生效） |
+| **完成时间** | 2026-09-04 |
+| **B1 金额大写互验** | `ai-service/app/services/chinese_amount.py`：中文大写金额（壹佰贰拾捌万元整）→ 数值，支持 亿/万/千/角/分；配合 extractor 金额字段交叉校验（WARNING 不阻断） |
+| **B5 业财一体化增强** | `ai-service/app/services/payment_schedule.py`：parse_payment_terms() 结构化解析付款条款（比例/金额/天数/里程碑），AI 提取的 payment_schedule 数组自动落到 Odoo `contract.payment.plan`（contract.py:386 在 action_ai_extract 内调用 `_generate_payment_plans`，重建 AI 来源计划时先删旧 AI 记录）；tests/test_payment_schedule.py 14 项全过 |
+| **E OCR 管线修复** | pdf_parser.py 适配 PaddleOCR 3.7.0 + paddle 3.3.1：① `predict()` 结果解析兼容 OCRResult（非 dict 子类，`res["rec_texts"]` + `_result_field` 兜底）；② **关键**：`enable_mkldnn=False` 绕开 paddle 3.x PIR 执行器 + oneDNN 的 `ConvertPirAttribute2RuntimeAttribute not support` 推理崩溃（paddleocr 经 parse_common_args 接受该公共参数 → engine_config.run_mode="paddle"）；③ `_preprocess_image` 二值化后转回 3 通道 BGR（2D 灰度导致 `tuple index out of range`）；④ `_deskew` Hough 纠偏接入 `_ocr_pipeline`；⑤ PP-Structure 3.x 尝试 PPStructureV3，失败优雅降级 |
+| **E 对比实验** | `scripts/test_ocr_comparison.py` 实测：文字版 pdfplumber 直抽相似度 100%/0.1s；合成扫描件（200dpi 纯图片）PaddleOCR 识别相似度 **99.84%**；分流判定全部正确。报告：`reports/ocr_comparison_*.md` |
+| **基础设施** | docker-compose.yml：① 新增 `paddle_models` 命名卷挂载 `/root/.paddlex`（PaddleX 模型缓存 ~250MB，避免每次 run 重新下载）；② 新增 `./ai-service/reports:/app/reports` 挂载（评估/对比报告持久化到宿主机，此前 run 容器销毁即丢失）；③ OCR 渲染 DPI 300→200（像素量降 2.25 倍防低配 Docker VM OOM）。.paddlex 模型源自动走 modelscope（aistudio 404 正常回退） |
+| **F/G 文档** | README.md 新增「🔍 PDF OCR 场景选型（考核 E）」+「🧠 原理讲解（考核 F：Tokenization→Embedding 语义坐标 / Attention QKV 直觉+余弦相似度 / 切块→向量化→Chroma HNSW→few-shot 回填全链路推演）」两章节；准确率口径修正：真实 LLM（DeepSeek）盲测 20 份金标准 **99.58%**（161055），离线 mock 对比 86.25%→98.75%（+12.5pp，155526） |
+| **遗留** | PPStructureV3 依赖缺失（`paddlex[doc-unwarping]` extras），表格识别在 3.x 优雅降级为跳过；如需表格识别在 Dockerfile 补 `pip install "paddlex[doc-unwarping]"` |
+
 ---
 
 ## 六、已完成内容记录
@@ -637,6 +651,8 @@ contract_payment_plan.py 全量重写（131→211 行）+ contract.py 新增 210
 | 2026-09-04 | **P0-3 正则兜底**：新建 app/services/postprocess_fallback.py（fill 只补缺失不覆盖；编号/金额/大写/日期×3/甲乙方/争议/币种 7 类策略）；extractor.py 在业务校验后集成 postprocess_fill；修复金额前缀 人民币? → (?:人民币)? 的量词作用域 bug（"合同总价：500,000 元"漏配）；test_postprocess_fallback.py 15 项全过（含总价≠单价回归） | AI |
 | 2026-09-04 | **P0-2 审批流+Cron**：新建 contract_approval_log.py + contract_workflow_actions.xml（3 个 ir.actions.server）+ contract_cron.xml（逾期提醒/到期归档 2 个 ir.cron）；contract.py 增 action_submit_approval/action_approve(重定义 approval→seal)/action_reject/_notify/_log_approval + 双 cron 方法（逾期计划按合同聚合、seal 到期自动归档）；contract_views.xml header 三按钮 + 审批记录 Tab；ACL +2；manifest 补 2 个 data 文件；`docker compose run --rm odoo -d contract_db -u contract_ai` 升级 EXIT=0，DB 确认表/cron/动作/ACL 就位；odoo shell 冒烟 submit→reject→submit→approve + 到期归档全通过 | AI |
 | 2026-09-04 | **P1-3 git 分阶段提交**：git reset 清理误暂存的 chroma_data 二进制；按 基础设施→AI核心→RAG评估→LangGraph/兜底/测试→Odoo模块→文档 6 笔提交；README v1.1.0 更新（P0 三节 + API 表 + 测试清单 + 完成度表） | AI |
+| 2026-09-04 | **P1-4 认证标准补齐**：新建 chinese_amount.py（大写金额→数值互验）+ payment_schedule.py（付款条款结构化解析）+ tests/test_payment_schedule.py（14 项）；contract.py `_generate_payment_plans` 接入 action_ai_extract；pdf_parser.py 修复 PaddleOCR 3.x 四连坑（OCRResult 解析 / enable_mkldnn=False 绕 PIR+oneDNN 崩溃 / 二值化转 3 通道 / 纠偏接入）+ PPStructureV3 降级；docker-compose 新增 paddle_models 卷；README 补 E 选型 + F 原理两章节；OCR 对比实测 文字版 100% vs 扫描件 99.84%；128 项 pytest 全通过 | AI |
+| 2026-09-04 | **人工测试样本生成**：新建 scripts/generate_manual_test_pdfs.py（仿真合同生成器：fitz 排版引擎 + fontTools 字体子集 + PIL 红色公章（弧形公司名/五角星/合同专用章）+ cv2 彩色扫描仿真（光照不均/噪声/失焦/0.4~1.4° 倾斜/暗角/暖色偏/JPEG q58-75））；产出 test_pdfs/manual/ 三件：文字版_办公设备采购合同_CG2025-018（2页/415KB/文本层1687字）、扫描版_房屋租赁合同_ZL2025-007（2页/纯图片层）、扫描版_软件开发服务合同_RW2025-021（3页/纯图片层）；分流判定 3/3 正确（text→直抽、scanned→OCR）；金额/账号断行保护（ASCII 串不拆分）；宿主机字体经 test_pdfs/.fonts/ 挂载进容器 | AI |
 
 ---
 

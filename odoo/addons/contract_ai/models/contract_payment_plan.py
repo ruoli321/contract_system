@@ -63,6 +63,16 @@ class ContractPaymentPlan(models.Model):
     )
     sort_order = fields.Integer(string="序号", default=1)
 
+    # ── 来源（B5 业财一体化：AI 提取自动生成 vs 人工录入） ──
+    source = fields.Selection(
+        [
+            ("ai_extracted", "AI 提取生成"),
+            ("manual", "人工录入"),
+        ],
+        string="来源", default="manual", index=True,
+        help="AI 提取自动生成的计划在重新提取时会被覆盖更新；人工录入的计划不受影响",
+    )
+
     # ── 收付款方向 ──
     direction = fields.Selection(
         [

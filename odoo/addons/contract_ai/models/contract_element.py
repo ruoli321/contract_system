@@ -81,6 +81,14 @@ class ContractElement(models.Model):
     # ════════════════════════════════════════════════
     # 元数据
     # ════════════════════════════════════════════════
+    source = fields.Selection(
+        [
+            ("manual", "人工录入"),
+            ("ai_extracted", "AI 提取"),
+        ],
+        string="来源", default="manual", index=True, copy=False,
+        help="AI 提取的元素在重新识别时会被覆盖，人工录入的不受影响",
+    )
     confidence = fields.Float(
         string="提取置信度", digits=(3, 2),
         help="AI 提取该元素的置信度（0.0 ~ 1.0）",

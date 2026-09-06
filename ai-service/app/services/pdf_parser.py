@@ -328,6 +328,52 @@ class PdfProcessor:
     # OCR 引擎初始化（延迟加载）
     # ═══════════════════════════════════════════════════════════════
 
+    def _build_paddleocr_3x(self):
+        """
+        构建 PaddleOCR 3.x 实例（enable_mkldnn=False 绕开 oneDNN/PIR 兼容性 bug）
+
+        paddleocr 3.x 经 parse_common_args 接受 enable_mkldnn 公共参数：
+        CPU 下 False → engine_config.run_mode="paddle"（禁用 oneDNN）。
+        paddle 3.x 的 PIR 执行器 + oneDNN 在部分 CPU 上报
+        "ConvertPirAttribute2RuntimeAttribute not support" 推理崩溃。
+
+        模型选型（2026-09 实测基准，扫描版合同 200dpi 单页 / 4核CPU）：
+          - PP-OCRv6_medium（默认）：44~49s/页
+          - PP-OCRv5_mobile     ：15~17s/页，行数与准确率持平略优
+          → CPU 用 mobile；GPU 保持默认 medium 精度模型
+
+        检测输入限缩（2026-09 bench_ocr_configs.py 基准）：
+          - text_det_limit_side_len=736 (max)：检测图长边缩到 736px，
+            单页 15~17s → 约 10.8s，行数/准确率与原图基本持平
+          - cpu_threads=4：4 线程最优（8 线程无增益且耗时抖动大）
+
+        三个前处理子模型全部关闭（实测对耗时无影响的 UVDoc/doc_ori 关闭后
+        不再加载，省内存；textline_orientation 每页多花 ~4s 且合同均为正向）：
+          - use_doc_orientation_classify：整图方向分类（合同扫描件固定正向）
+          - use_doc_unwarping：UVDoc 弯曲矫正（针对书页弯曲，合同不适用）
+          - use_textline_orientation：行级方向分类（正向文档不需要）
+        """
+        from paddleocr import PaddleOCR
+
+        logger.info("🔄 首次加载 PaddleOCR（3.x, %s 模型, enable_mkldnn=False）...",
+                    "medium" if self.use_gpu else "mobile")
+        kwargs = dict(
+            lang=self.lang,
+            device="gpu" if self.use_gpu else "cpu",
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+            use_textline_orientation=False,
+            enable_mkldnn=False,
+            # ── 基准测试优选参数（scripts/bench_ocr_configs.py）──
+            cpu_threads=4,
+            text_det_limit_side_len=736,
+            text_det_limit_type="max",
+        )
+        if not self.use_gpu:
+            kwargs["text_detection_model_name"] = "PP-OCRv5_mobile_det"
+            kwargs["text_recognition_model_name"] = "PP-OCRv5_mobile_rec"
+        return PaddleOCR(**kwargs)
+
     def _init_ocr(self) -> bool:
         """延迟加载 OCR 引擎，返回是否成功"""
         if self._ocr_initialized:
@@ -335,22 +381,52 @@ class PdfProcessor:
 
         try:
             if self.ocr_engine == "paddleocr":
-                logger.info("🔄 首次加载 PaddleOCR...")
                 from paddleocr import PaddleOCR
-                self._ocr = PaddleOCR(
-                    use_angle_cls=True,
-                    lang=self.lang,
-                    use_gpu=self.use_gpu,
-                    show_log=False,
-                )
+                # PaddleOCR 3.x 移除了 use_gpu/show_log（改 device 参数）、
+                # use_angle_cls 改名 use_textline_orientation；这里先试 3.x
+                # 参数，失败回退 2.x，兼容两个大版本。
+                # 注意：paddle 3.x 的 PIR 执行器与 oneDNN 在部分 CPU 上推理
+                # 崩溃（ConvertPirAttribute2RuntimeAttribute not support），
+                # 3.x 通过 enable_mkldnn=False 显式禁用 oneDNN。
+                try:
+                    self._ocr = self._build_paddleocr_3x()
+                except (ImportError, TypeError, ValueError) as e:
+                    logger.warning(f"PaddleOCR 3.x 初始化降级（{e}），尝试兼容模式")
+                    try:
+                        self._ocr = PaddleOCR(
+                            lang=self.lang,
+                            device="gpu" if self.use_gpu else "cpu",
+                            use_textline_orientation=True,
+                        )
+                    except (TypeError, ValueError):
+                        self._ocr = PaddleOCR(
+                            use_angle_cls=True,
+                            lang=self.lang,
+                            use_gpu=self.use_gpu,
+                            show_log=False,
+                        )
                 # 可选：PP-Structure（表格识别）
+                # 2.x 类名 PPStructure；3.x 改名 PPStructureV3（首次使用会自动下载模型）
                 if self.enable_table_detect:
                     try:
-                        from paddleocr import PPStructure
+                        from paddleocr import PPStructure  # 2.x
                         self._table_engine = PPStructure(
                             use_gpu=self.use_gpu, show_log=False
                         )
                         logger.info("✅ PP-Structure 表格引擎已加载")
+                    except ImportError:
+                        try:
+                            from paddleocr import PPStructureV3  # 3.x
+                            self._table_engine = PPStructureV3(
+                                device="gpu" if self.use_gpu else "cpu",
+                                use_doc_orientation_classify=False,
+                                use_doc_unwarping=False,
+                                use_textline_orientation=False,
+                            )
+                            logger.info("✅ PP-StructureV3 表格引擎已加载（3.x）")
+                        except Exception as e:
+                            logger.warning(f"⚠️ PP-Structure 加载失败: {e}")
+                            self._table_engine = None
                     except Exception as e:
                         logger.warning(f"⚠️ PP-Structure 加载失败: {e}")
                         self._table_engine = None
@@ -379,11 +455,13 @@ class PdfProcessor:
     # 内部：PDF → 图片
     # ═══════════════════════════════════════════════════════════════
 
-    def _pdf_to_images(self, pdf_bytes: bytes, dpi: int = 300) -> list:
+    def _pdf_to_images(self, pdf_bytes: bytes, dpi: int = 200) -> list:
         """
         用 PyMuPDF (fitz) 把 PDF 每页渲染为 numpy.ndarray（OpenCV 兼容格式）
 
-        比 pdf2image + poppler 快 3-5x，且不需要系统安装 poppler
+        比 pdf2image + poppler 快 3-5x，且不需要系统安装 poppler。
+        默认 200dpi：OCR 识别的标准分辨率，相比 300dpi 像素量降 2.25 倍，
+        显著降低 CPU 推理耗时与内存峰值（低配 Docker VM 防 OOM）。
         """
         images = []
         try:
@@ -444,8 +522,12 @@ class PdfProcessor:
 
     def _preprocess_image(self, img):
         """
-        OpenCV 图像预处理管线：
-        灰度 → 高斯去噪 → 二值化（自适应）→ 可选纠偏
+        OpenCV 图像预处理管线：灰度 → 高斯去噪（可选纠偏见 _deskew）
+
+        ⚠️ 不做自适应二值化（2026-09 实测）：PaddleOCR 检测/识别模型在自然
+        灰度图上训练，硬二值化丢失笔画反锯齿细节反而降准确率——同一扫描页
+        实测：二值图 822 字符 30 行（"签订时间"误识为"签订时问"），
+        灰度去噪图 826 字符 32 行零错字。
 
         Args:
             img: numpy.ndarray (BGR 或灰度)
@@ -466,16 +548,10 @@ class PdfProcessor:
             # 2) 高斯滤波去噪（核 5x5）
             denoised = cv2.GaussianBlur(gray, (5, 5), 0)
 
-            # 3) 自适应二值化（比全局 Otsu 对光照不均更稳）
-            binary = cv2.adaptiveThreshold(
-                denoised, 255,
-                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv2.THRESH_BINARY,
-                blockSize=15, C=8,
-            )
-
-            logger.debug("  图像预处理: 灰度→去噪→自适应二值化")
-            return binary
+            # PaddleOCR 3.x predict() 要求 3 通道输入，2D 灰度会报
+            # "tuple index out of range"，这里统一转回 3 通道 BGR
+            logger.debug("  图像预处理: 灰度→去噪→BGR")
+            return cv2.cvtColor(denoised, cv2.COLOR_GRAY2BGR)
 
         except ImportError:
             logger.warning("OpenCV 不可用，返回原图")
@@ -537,6 +613,22 @@ class PdfProcessor:
     # 内部：OCR 引擎执行
     # ═══════════════════════════════════════════════════════════════
 
+    @staticmethod
+    def _result_field(res, key: str):
+        """
+        从 OCR 结果对象中安全取字段。
+
+        兼容三种形态：
+          - dict（2.x / 部分版本）
+          - OCRResult（3.x，实现 __getitem__ 但非 dict 子类）
+          - 普通对象属性
+        """
+        try:
+            v = res[key]
+            return v
+        except Exception:
+            return getattr(res, key, None)
+
     def _paddleocr_run(self, img, page_num: int) -> tuple[str, list[TableInfo]]:
         """
         PaddleOCR 识别单页
@@ -551,22 +643,30 @@ class PdfProcessor:
         all_text_lines = []
 
         try:
-            # PaddleOCR 3.x: ocr(img, cls=True)
-            # 返回 [[[bbox, (text, conf)], ...]]  （batch 外层）
-            result = self._ocr.ocr(img, cls=True)
-
-            # 兼容 2.x / 3.x 返回格式
-            if result and len(result) > 0 and result[0]:
-                for line in result[0]:
-                    try:
-                        # line = [bbox, (text, confidence)]
-                        text = line[1][0] if isinstance(line[1], (list, tuple)) else str(line[1])
-                        conf = line[1][1] if isinstance(line[1], (list, tuple)) else 0.0
-                        # 过滤低置信度（< 0.5）和空文本
-                        if text and conf > 0.5:
-                            all_text_lines.append(text)
-                    except (IndexError, TypeError):
+            # ── PaddleOCR 3.x：predict() 返回 OCRResult 列表（dict 风格访问
+            #    rec_texts/rec_scores；OCRResult 非dict子类但实现了 __getitem__）──
+            if hasattr(self._ocr, "predict"):
+                result = self._ocr.predict(img)
+                for res in result or []:
+                    texts = self._result_field(res, "rec_texts")
+                    scores = self._result_field(res, "rec_scores")
+                    if not texts:
                         continue
+                    for text, conf in zip(texts, scores or [1.0] * len(texts)):
+                        if text and float(conf) > 0.5:
+                            all_text_lines.append(text)
+            else:
+                # ── PaddleOCR 2.x：ocr() 返回 [[[bbox, (text, conf)], ...]] ──
+                result = self._ocr.ocr(img, cls=True)
+                if result and len(result) > 0 and result[0]:
+                    for line in result[0]:
+                        try:
+                            text = line[1][0] if isinstance(line[1], (list, tuple)) else str(line[1])
+                            conf = line[1][1] if isinstance(line[1], (list, tuple)) else 0.0
+                            if text and conf > 0.5:
+                                all_text_lines.append(text)
+                        except (IndexError, TypeError):
+                            continue
 
         except Exception as e:
             logger.warning(f"PaddleOCR 识别异常 (p{page_num}): {e}")

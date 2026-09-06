@@ -5,6 +5,7 @@
 import io
 import logging
 from datetime import datetime
+from urllib.parse import quote
 
 from odoo import http, fields, _
 from odoo.http import request, Response
@@ -57,7 +58,7 @@ class ContractExportController(http.Controller):
         if not contracts:
             raise UserError(_("没有符合条件的合同可导出"))
 
-        wb = self._build_workbook(contracts, Font, Alignment, PatternFill, Border, Side, get_column_letter)
+        wb = self._build_workbook(contracts, openpyxl, Font, Alignment, PatternFill, Border, Side, get_column_letter)
 
         # 输出到内存
         stream = io.BytesIO()
@@ -69,8 +70,9 @@ class ContractExportController(http.Controller):
             stream.getvalue(),
             headers=[
                 ("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+                # HTTP 头仅支持 latin-1，中文文件名必须用 RFC 5987 的 filename* 形式
                 ("Content-Disposition",
-                 f'attachment; filename="{filename}"'),
+                 f"attachment; filename=\"contract_export.xlsx\"; filename*=UTF-8''{quote(filename)}"),
             ],
         )
 
@@ -89,7 +91,7 @@ class ContractExportController(http.Controller):
             domain.append(("date_signed", "<=", params["date_to"]))
         return domain
 
-    def _build_workbook(self, contracts, Font, Alignment, PatternFill, Border, Side, get_column_letter):
+    def _build_workbook(self, contracts, openpyxl, Font, Alignment, PatternFill, Border, Side, get_column_letter):
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "合同台账"

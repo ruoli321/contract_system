@@ -375,7 +375,7 @@ def load_services_or_mock(offline: bool = False):
         )
         pm = PromptManager(prompts_dir=settings.prompts_dir)
         classifier = ContractClassifier(llm_client=llm, prompt_manager=pm)
-        rag_learner = RAGLearner(vector_store=vs, prompt_manager=pm)
+        rag_learner = RAGLearner(vector_store=vs)
         extractor = ContractExtractor(llm, prompt_manager=pm, rag_learner=rag_learner)
 
         logger.info("✅ 服务初始化成功：LLM + PdfProcessor + VectorStore + RAGLearner + Extractor")
@@ -810,45 +810,78 @@ def compute_rag_metrics(round_result: dict, use_ragas: bool = True) -> dict:
             logger.info("  📦 ragas 库未安装 → 使用自算版 faithfulness/relevancy")
         return _compute_simple_rag_metrics(pairs)
 
-    # ── ragas 库路线（4 个核心指标） ──
+    # ── ragas 库路线（4 个核心指标，ragas 0.4.x collections API） ──
     try:
-        import pandas as pd
-        from ragas import evaluate
-        # ragas 0.4.x: 每个 metric 在 ragas.metrics.collections.<name> 模块里，类名大写开头
-        try:
-            from ragas.metrics.collections.faithfulness import Faithfulness
-            from ragas.metrics.collections.answer_relevancy import AnswerRelevancy
-            from ragas.metrics.collections.context_precision import ContextPrecision
-            from ragas.metrics.collections.context_recall import ContextRecall
-        except ImportError:
-            # 旧版 ragas（<0.4）兼容
-            from ragas.metrics import (
-                faithfulness as Faithfulness,
-                answer_relevancy as AnswerRelevancy,
-                context_precision as ContextPrecision,
-                context_recall as ContextRecall,
-            )
+        import asyncio
+        import os
 
-        rows = [{
-            "question": p["question"],
-            "answer": p["answer"],
-            "ground_truth": p["ground_truth"],
-            "contexts": [p["context"][:2000]],  # ragas 要 contexts 是 list
-        } for p in pairs]
+        from openai import AsyncOpenAI
+        from ragas.embeddings import HuggingFaceEmbeddings
+        from ragas.llms import llm_factory
+        from ragas.metrics.collections.answer_relevancy import AnswerRelevancy
+        from ragas.metrics.collections.context_precision import ContextPrecision
+        from ragas.metrics.collections.context_recall import ContextRecall
+        from ragas.metrics.collections.faithfulness import Faithfulness
 
-        df = pd.DataFrame(rows)
-        result = evaluate(df, metrics=[
-            Faithfulness(), AnswerRelevancy(),
-            ContextPrecision(), ContextRecall(),
-        ])
+        from app.config import get_settings
+
+        # LLM-as-judge 逐条调用很慢（240 对全跑约 2000+ 次 judge），默认抽样 30 条
+        max_pairs = int(os.environ.get("RAGAS_MAX_PAIRS", "30"))
+        sample = pairs if len(pairs) <= max_pairs else pairs[:: len(pairs) // max_pairs][:max_pairs]
+
+        _s = get_settings()
+        # ascore() 是异步 API，judge client 必须用 AsyncOpenAI（同步 client 会报
+        # "Cannot use agenerate() with a synchronous client"）
+        judge = llm_factory(
+            _s.llm_model,
+            client=AsyncOpenAI(api_key=_s.llm_api_key, base_url=_s.llm_base_url),
+        )
+        embedder = HuggingFaceEmbeddings(model=_s.embedding_model)
+
+        f_metric = Faithfulness(llm=judge)
+        ar_metric = AnswerRelevancy(llm=judge, embeddings=embedder)
+        cp_metric = ContextPrecision(llm=judge)
+        cr_metric = ContextRecall(llm=judge)
+
+        async def _run_all():
+            sums = {"faithfulness": 0.0, "answer_relevancy": 0.0,
+                    "context_precision": 0.0, "context_recall": 0.0}
+            counts = dict.fromkeys(sums, 0)
+
+            async def _score(metric, key, **kw):
+                try:
+                    r = await metric.ascore(**kw)
+                    sums[key] += float(r.value)
+                    counts[key] += 1
+                except Exception as exc:  # 单条失败不影响整体
+                    logger.warning(f"    {key} 单条失败: {exc}")
+
+            for p in sample:
+                ctx = [p["context"][:2000]]
+                await _score(f_metric, "faithfulness",
+                             user_input=p["question"], response=p["answer"],
+                             retrieved_contexts=ctx)
+                await _score(ar_metric, "answer_relevancy",
+                             user_input=p["question"], response=p["answer"])
+                await _score(cp_metric, "context_precision",
+                             user_input=p["question"], reference=p["ground_truth"],
+                             retrieved_contexts=ctx)
+                await _score(cr_metric, "context_recall",
+                             user_input=p["question"],
+                             retrieved_contexts=ctx, reference=p["ground_truth"])
+            return sums, counts
+
+        sums, counts = asyncio.run(_run_all())
+        if min(counts.values()) == 0:
+            raise RuntimeError("ragas 单条调用全部失败")
 
         return {
-            "faithfulness": round(float(result["faithfulness"]), 4),
-            "answer_relevancy": round(float(result["answer_relevancy"]), 4),
-            "context_precision": round(float(result["context_precision"]), 4),
-            "context_recall": round(float(result["context_recall"]), 4),
-            "pair_count": len(pairs),
-            "note": "ragas 0.4.x 库计算（LLM-as-judge）",
+            k: round(sums[k] / max(counts[k], 1), 4)
+            for k in ("faithfulness", "answer_relevancy",
+                      "context_precision", "context_recall")
+        } | {
+            "pair_count": len(sample),
+            "note": f"ragas 0.4.3 LLM-as-judge（DeepSeek，抽样 {len(sample)}/{len(pairs)} 条）",
         }
     except Exception as e:
         logger.warning(f"  ⚠️  ragas 调用失败（{e}），回退到自算版")

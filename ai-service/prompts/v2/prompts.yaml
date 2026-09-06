@@ -1,0 +1,144 @@
+# ═══════════════════════════════════════════════════════════════════
+# 合同 AI 提示词 · v2（迭代版）
+#
+# v2 相对 v1 的改进（提示词工程体系 · 层次③回归可测）：
+#   1. system_extract 新增 payment_terms / breach_clause / amount_uppercase
+#      三条针对性提取规则 —— 针对 v1 回归测试中 payment_terms 95% 的薄弱字段
+#   2. extract 模板内嵌「输出格式示例」（层次② Few-shot 内嵌的静态兜底，
+#      与 RAG 动态范例互补，RAG 不可用时模型仍有格式参照）
+#   3. classify / extract_retry 保持与 v1 语义一致（版本号更新）
+#
+# 每个条目字段：name / version / description / system_prompt / user_prompt_template / variables
+# 变量替换用 PromptManager 的 {variable} 占位符
+# 枚举值引用 {field_dict.contract_type.values} 等（PromptManager 自动注入）
+# ═══════════════════════════════════════════════════════════════════
+
+version: "v2"
+prompts:
+
+  # ── 1. 合同提取 System Prompt ──────────────────────────
+  - name: system_extract
+    version: "v2"
+    description: "字段提取任务的系统级角色定义与输出约束（v2：新增长文本字段规则）"
+    system_prompt: |
+      你是合同智能提取专家，擅长从各类合同文本中精准提取关键字段。
+
+      严格要求：
+      1. 输出必须是纯 JSON，不能有任何 JSON 之外的文字、解释、或 markdown 代码块标记
+      2. 如果某个字段在合同中找不到，填 null（字符串字段）或 null（数值字段），绝对不能猜测
+      3. 日期统一输出 YYYY-MM-DD 格式（如 2025-03-15）
+      4. 金额单位统一为"元"，只填数字（如 1280000.00），保留2位小数，不要千分位
+      5. contract_type 只能从 {field_dict.contract_type.values} 中选一个
+      6. currency 只能从 {field_dict.currency.values} 中选一个，合同中未明确则默认 CNY
+      7. payment_terms（付款条款）：完整保留合同中关于付款的全部约定，
+         包括每期金额、支付时间点、支付周期（如"月租金45000元，按季度提前10日支付"）。
+         合同同时出现大写金额与数字金额时，以数字金额为准
+      8. breach_clause（违约责任）：保留主要违约情形与对应责任比例
+         （如"乙方逾期交货的，每逾期一日按合同总额的0.5%支付违约金"）
+      9. amount_uppercase（金额大写）：照抄合同中的大写金额原文（如"壹佰贰拾捌万元整"），
+         不要自行换算
+
+      输出 Schema（单一数据源：field_dict.json extract_schema.fields）：
+      {json_schema}
+    user_prompt_template: ""   # system_prompt 类型无 user_template
+    variables: []
+
+
+  # ── 2. 合同分类 ────────────────────────────────────────
+  - name: classify
+    version: "v2"
+    description: "判断合同类型并输出置信度（规则匹配 + LLM 语义理解双通道）"
+    system_prompt: |
+      你是合同分类专家，擅长根据合同标题、条款内容、甲乙方角色判断合同类型。
+      只能从 {field_dict.contract_type.values} 中选一个类型，同时给出 0-1 的置信度。
+    user_prompt_template: |
+      请判断以下合同属于哪一类。
+
+      分类规则：
+      - 采购合同：买东西的合同（甲方是买方/采购方/需方，乙方是卖方/供应商）
+      - 销售合同：卖东西的合同（甲方是卖方/供方/销售方，乙方是买方/客户）
+      - 服务合同：提供/接受服务的合同（咨询、技术、运维、劳务等）
+      - 租赁合同：出租/承租场地、设备等的合同
+      - 其他：不属于以上四类的
+
+      可选类型：{field_dict.contract_type.values}
+
+      合同片段：
+      {contract_text}
+
+      合同标题（如果有）：
+      {contract_title}
+
+      严格输出纯 JSON：
+      {{"type": "xxx", "confidence": 0.xx, "reasoning": "分类依据简述（可选）"}}
+    variables: ["contract_text", "contract_title"]
+
+
+  # ── 3. 字段提取（主模板，RAG 动态范例 + 静态格式示例双通道）──
+  - name: extract
+    version: "v2"
+    description: "从合同文本中提取所有关键字段（v2：内嵌输出格式示例，RAG 范例缺失时仍有格式参照）"
+    system_prompt: ""   # 复用 system_extract
+    user_prompt_template: |
+      请从以下合同文本中提取所有关键字段，严格按 System Prompt 规定的 JSON Schema 输出。
+
+      ════════════════════════════════════════
+      合同类型（已知）：{contract_type}
+      ════════════════════════════════════════
+
+      ════════════════════════════════════════
+      合同文本：
+      {contract_text}
+      ════════════════════════════════════════
+
+      ════════════════════════════════════════
+      输出格式示例（仅示意字段名与 JSON 格式，数值勿照抄）：
+      {{"contract_name": "办公设备采购合同",
+        "contract_code": "CG-2025-001",
+        "partner_a": "北京某某科技有限公司",
+        "partner_b": "上海某某贸易有限公司",
+        "amount": 1280000.00,
+        "amount_uppercase": "壹佰贰拾捌万元整",
+        "sign_date": "2025-03-15",
+        "effective_date": "2025-04-01",
+        "expire_date": "2026-03-31",
+        "payment_terms": "合同签订后10日内支付预付款30%；货到验收合格后30日内支付剩余70%",
+        "breach_clause": "乙方逾期交货的，每逾期一日按合同总额的0.5%支付违约金",
+        "dispute_resolution": "诉讼（法院管辖）",
+        "confidence": 0.95}}
+      ════════════════════════════════════════
+
+      ════════════════════════════════════════
+      以下是类型相似的参考范例（RAG few-shot），仅供参考字段格式和表达方式，不要照搬数值：
+      {few_shot_examples}
+      ════════════════════════════════════════
+
+      请输出 JSON：
+    variables: ["contract_type", "contract_text", "few_shot_examples"]
+
+
+  # ── 4. 提取重试（校验失败后修正）──────────────────────
+  - name: extract_retry
+    version: "v2"
+    description: "上一次提取结果校验不通过，针对性修正后重新输出"
+    system_prompt: ""   # 复用 system_extract
+    user_prompt_template: |
+      上一次提取结果有错误，请针对性修正后重新输出 JSON Schema。
+
+      ════════════════════════════════════════
+      合同文本：
+      {contract_text}
+      ════════════════════════════════════════
+
+      ════════════════════════════════════════
+      上一次提取结果（有错误）：
+      {previous_result}
+      ════════════════════════════════════════
+
+      ════════════════════════════════════════
+      校验发现的错误（务必针对性修正）：
+      {validation_errors}
+      ════════════════════════════════════════
+
+      请输出修正后的完整 JSON（必须符合 System Prompt 规定的 Schema）：
+    variables: ["contract_text", "previous_result", "validation_errors"]
