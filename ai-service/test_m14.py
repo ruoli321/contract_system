@@ -1,4 +1,4 @@
-﻿"""
+"""
 M14 · AI 服务 API 层 — FastAPI 端点测试
 使用 FastAPI TestClient + mock 服务，不启动真实 Chroma/LLM
 """
@@ -22,6 +22,10 @@ def _make_mock_services():
         text="办公设备采购合同\n甲方：XX公司\n乙方：YY供应商\n金额：50万元",
         pdf_type="text",
         tables=None,
+        # M21/M22: gatekeeper 会真实消费 quality 内容，mock 必须符合真实契约形状
+        # （真实 PdfExtractionResult.quality 为 dict 或 None，绝不是 MagicMock）
+        quality={"score": 0.95, "ok": True, "pdf_type": "text",
+                 "readable_ratio": 0.98, "garbage_ratio": 0.0, "threshold": 0.85},
     )
 
     # ── Mock PromptManager ──
@@ -65,6 +69,7 @@ def _make_mock_services():
         llm_result="采购合同",
         llm_confidence=0.92,
         llm_failed=False,
+        review_reasons=[],  # M21 分类可靠性信号
     )
 
     # ── Mock Extractor ──
@@ -73,6 +78,14 @@ def _make_mock_services():
     mock_result.confidence = 0.88
     mock_result.attempt_count = 1
     mock_result.used_rag = True
+    # ── M21 质量门禁字段（main.py 构建 ValidationReport / build_quality 用）──
+    mock_result.validation_errors = []
+    mock_result.fatal_errors = []
+    mock_result.warnings = []
+    mock_result.critical_missing = []
+    mock_result.field_evidence = {}
+    mock_result.system_confidence = 0.90
+    mock_result.is_fallback = False
     mock_result.to_api_dict.return_value = {
         "extraction": {
             "contract_name": "办公设备采购合同",

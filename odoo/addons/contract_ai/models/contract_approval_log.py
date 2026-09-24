@@ -25,6 +25,9 @@ class ContractApprovalLog(models.Model):
             ("approve", "审批通过"),
             ("reject", "审批驳回"),
             ("cancel", "撤回"),
+            # M22 复核动作（质量门禁闭环）
+            ("review_confirm", "复核确认"),
+            ("review_reset", "重置复核"),
         ],
         required=True, string="动作",
     )

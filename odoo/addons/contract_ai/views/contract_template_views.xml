@@ -37,17 +37,53 @@
                         </group>
                         <notebook>
                             <page string="模板条款" name="clauses">
-                                <field name="clause_ids">
-                                    <tree editable="bottom" create="true" delete="true">
+                                <!-- M23：顶部全文排版预览 + 列表单行摘要，点击行进对话框编辑 -->
+                                <field name="clauses_preview_html" nolabel="1" readonly="1"
+                                       class="o_clause_preview_panel"
+                                       invisible="not clause_ids"/>
+                                <field name="clause_ids" nolabel="1">
+                                    <tree>
                                         <field name="sort_order"/>
                                         <field name="name"/>
                                         <field name="clause_type"/>
                                         <field name="is_required"/>
-                                        <field name="content"/>
+                                        <field name="content_html" widget="html" string="条款正文"
+                                               class="o_clause_content_html"/>
                                     </tree>
                                 </field>
                             </page>
                         </notebook>
+                    </sheet>
+                </form>
+            </field>
+        </record>
+
+        <!-- contract.clause — 条款编辑对话框（M23：列表行点击打开；
+             上部编辑正文，下部实时排版预览） -->
+        <record id="view_contract_clause_form" model="ir.ui.view">
+            <field name="name">contract.clause.form</field>
+            <field name="model">contract.clause</field>
+            <field name="arch" type="xml">
+                <form string="合同条款">
+                    <sheet>
+                        <group>
+                            <group string="基本信息">
+                                <field name="name"/>
+                                <field name="clause_type"/>
+                                <field name="sort_order"/>
+                            </group>
+                            <group string="属性">
+                                <field name="source" readonly="1"/>
+                                <field name="is_required"/>
+                                <field name="is_modified" readonly="1"/>
+                            </group>
+                        </group>
+                        <separator string="条款正文"/>
+                        <field name="content" nolabel="1" widget="textarea"
+                               placeholder="支持纯文本；「第X条 / 一、 / （一） / 1.」开头的行会自动识别为标题"/>
+                        <separator string="排版预览"/>
+                        <field name="content_html" nolabel="1" readonly="1"
+                               class="o_clause_preview_panel"/>
                     </sheet>
                 </form>
             </field>

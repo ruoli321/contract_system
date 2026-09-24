@@ -190,6 +190,19 @@
                                 </div>
                             </t>
 
+                            <!-- 合同条款（M23 补充：详情报表输出条款正文，排版与模板文书报表一致） -->
+                            <t t-if="doc.clause_ids">
+                                <h3 style="background: #2E4057; color: white; padding: 8px 12px; font-size: 13px;">合同条款</h3>
+                                <t t-foreach="doc.clause_ids.sorted(key=lambda c: (c.sort_order, c.id))" t-as="clause">
+                                    <h4 style="color: #2E4057; font-size: 12px; font-weight: bold; margin: 12px 0 6px;">
+                                        <t t-esc="clause.name"/>
+                                    </h4>
+                                    <p style="font-size: 12px; line-height: 1.8; text-indent: 2em; margin: 0 0 8px; white-space: pre-wrap;">
+                                        <t t-esc="clause.content"/>
+                                    </p>
+                                </t>
+                            </t>
+
                             <!-- 页脚 -->
                             <p style="text-align: right; color: #888; font-size: 10px; margin-top: 30px;">
                                 打印时间: <t t-esc="datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')"/> |
@@ -224,6 +237,346 @@
             <field name="report_file">contract_detail</field>
             <field name="print_report_name">(object.code or object.name) + '_' + time.strftime('%Y%m%d')</field>
             <field name="binding_model_id" ref="model_contract_contract"/>
+            <field name="binding_type">report</field>
+        </record>
+
+        <!-- ═══ 报表 3：合同模板文书（模板条款 PDF，按 sort_order 排版） ═══ -->
+        <template id="report_contract_template_pdf">
+            <t t-call="web.html_container">
+                <t t-foreach="docs" t-as="doc">
+                    <t t-call="web.external_layout">
+                        <div class="page">
+                            <!-- 标题：模板名称即文书标题 -->
+                            <h1 style="text-align: center; color: #2E4057; border-bottom: 3px double #2E4057; padding-bottom: 15px;">
+                                <t t-esc="doc.name or '合同模板'"/>
+                            </h1>
+                            <p style="text-align: center; color: #666; margin: 10px 0 20px; font-size: 12px;">
+                                适用类型: <t t-esc="dict(doc._fields['type'].get_description(env)).get(doc.type, doc.type or '')"/>
+                                | 版本: <t t-esc="doc.version or 'v1.0'"/>
+                                | 条款数: <t t-esc="doc.clause_count"/>
+                                <t t-if="not doc.is_active"> | 【已停用】</t>
+                            </p>
+
+                            <!-- 模板说明（如有） -->
+                            <t t-if="doc.description">
+                                <div style="border-left: 4px solid #2E4057; background: #F5F7FA; padding: 10px 12px; margin-bottom: 20px; font-size: 11px; color: #555;">
+                                    <t t-esc="doc.description"/>
+                                </div>
+                            </t>
+
+                            <!-- 条款正文（合同文书式排版：第 N 条 + 正文） -->
+                            <t t-foreach="doc.clause_ids.sorted(key=lambda c: c.sort_order)" t-as="clause">
+                                <div style="margin-bottom: 18px;">
+                                    <h3 style="font-size: 13px; color: #2E4057; margin: 0 0 8px 0;">
+                                        第 <t t-esc="clause_index + 1"/> 条　<t t-esc="clause.name"/>
+                                        <t t-if="clause.is_required">
+                                            <span style="color: #E65100; font-size: 10px;">【必备】</span>
+                                        </t>
+                                    </h3>
+                                    <p style="font-size: 12px; line-height: 1.8; text-indent: 2em; margin: 0; white-space: pre-wrap;">
+                                        <t t-esc="clause.content"/>
+                                    </p>
+                                </div>
+                            </t>
+                            <t t-if="not doc.clause_ids">
+                                <p style="text-align: center; color: #999; margin-top: 40px;">
+                                    该模板暂无条款，请先在"模板条款"页添加条款后重新打印
+                                </p>
+                            </t>
+
+                            <!-- 页脚 -->
+                            <p style="text-align: right; color: #888; font-size: 10px; margin-top: 30px;">
+                                打印时间: <t t-esc="datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')"/> |
+                                合同管理 AI 系统 | 模板文书预览
+                            </p>
+                        </div>
+                    </t>
+                </t>
+            </t>
+        </template>
+
+        <!-- 合同模板 PDF 打印动作 -->
+        <record id="action_report_contract_template_pdf" model="ir.actions.report">
+            <field name="name">合同模板 PDF</field>
+            <field name="model">contract.template</field>
+            <field name="report_type">qweb-pdf</field>
+            <field name="report_name">contract_ai.report_contract_template_pdf</field>
+            <field name="report_file">contract_template</field>
+            <field name="print_report_name">(object.name or 'contract_template') + '_' + (object.version or 'v1.0')</field>
+            <field name="binding_model_id" ref="model_contract_template"/>
+            <field name="binding_type">report</field>
+        </record>
+
+        <!-- ═══ 报表 4：收付款台账 PDF（计划明细 + 应收/应付汇总） ═══ -->
+        <template id="report_contract_plan_pdf">
+            <t t-call="web.html_container">
+                <t t-foreach="docs" t-as="doc">
+                    <t t-call="web.external_layout">
+                        <div class="page">
+                            <h2 style="border-bottom: 3px solid #2E4057; padding-bottom: 10px; color: #2E4057;">
+                                <i class="fa fa-money"></i>
+                                收付款台账
+                            </h2>
+
+                            <!-- 汇总指标 -->
+                            <div style="margin: 15px 0; display: flex; gap: 20px;">
+                                <div style="flex: 1; background: #E8F0FE; padding: 12px; border-radius: 6px;">
+                                    <div style="color: #666; font-size: 12px;">计划总数</div>
+                                    <div style="font-size: 20px; font-weight: bold; color: #2E4057;">
+                                        <t t-esc="len(docs)"/>
+                                    </div>
+                                </div>
+                                <div style="flex: 1; background: #FFF3E0; padding: 12px; border-radius: 6px;">
+                                    <div style="color: #666; font-size: 12px;">计划总额</div>
+                                    <div style="font-size: 20px; font-weight: bold; color: #E65100;">
+                                        ¥ <t t-esc="sum(d.planned_amount for d in docs) or 0"/>
+                                    </div>
+                                </div>
+                                <div style="flex: 1; background: #E8F5E9; padding: 12px; border-radius: 6px;">
+                                    <div style="color: #666; font-size: 12px;">已核销</div>
+                                    <div style="font-size: 20px; font-weight: bold; color: #2E7D32;">
+                                        ¥ <t t-esc="sum(d.actual_amount for d in docs) or 0"/>
+                                    </div>
+                                </div>
+                                <div style="flex: 1; background: #FDECEA; padding: 12px; border-radius: 6px;">
+                                    <div style="color: #666; font-size: 12px;">逾期数</div>
+                                    <div style="font-size: 20px; font-weight: bold; color: #C62828;">
+                                        <t t-esc="sum(1 for d in docs if d.is_overdue)"/>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 应收/应付方向汇总 -->
+                            <table style="width: 100%; border-collapse: collapse; margin-bottom: 15px;">
+                                <tr>
+                                    <td style="border: 1px solid #ddd; padding: 8px; background: #E8F5E9; font-weight: bold; color: #2E7D32; width: 25%;">
+                                        应收合计（收款）
+                                    </td>
+                                    <td style="border: 1px solid #ddd; padding: 8px; font-size: 15px; color: #2E7D32;">
+                                        ¥ <t t-esc="sum(d.planned_amount for d in docs if d.direction == 'receivable') or 0"/>
+                                    </td>
+                                    <td style="border: 1px solid #ddd; padding: 8px; background: #FFF8E1; font-weight: bold; color: #E65100; width: 25%;">
+                                        应付合计（付款）
+                                    </td>
+                                    <td style="border: 1px solid #ddd; padding: 8px; font-size: 15px; color: #E65100;">
+                                        ¥ <t t-esc="sum(d.planned_amount for d in docs if d.direction == 'payable') or 0"/>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <!-- 明细表 -->
+                            <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 10px;">
+                                <thead>
+                                    <tr style="background: #2E4057; color: white;">
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">合同编号</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">合同名称</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">收付款节点</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">节点类型</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">方向</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">计划日期</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px; text-align: right;">计划金额</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px; text-align: right;">已核销</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px; text-align: right;">剩余</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">状态</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <t t-foreach="docs" t-as="doc">
+                                        <tr style="background: {'#FDECEA' if doc.is_overdue else ('#f9f9f9' if doc_index % 2 else 'white')};">
+                                            <td style="border: 1px solid #ddd; padding: 4px;"><t t-esc="doc.contract_code or '/'"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;"><t t-esc="doc.contract_name or ''"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;"><t t-esc="doc.name or ''"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;">
+                                                <t t-esc="dict(doc._fields['milestone'].get_description(env)).get(doc.milestone, doc.milestone or '')"/>
+                                            </td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;">
+                                                <t t-esc="dict(doc._fields['direction'].get_description(env)).get(doc.direction, doc.direction or '/')"/>
+                                            </td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;"><t t-esc="doc.planned_date or ''"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px; text-align: right;">¥ <t t-esc="doc.planned_amount or 0"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px; text-align: right;">¥ <t t-esc="doc.actual_amount or 0"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px; text-align: right;">¥ <t t-esc="doc.remaining_amount or 0"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;">
+                                                <t t-esc="dict(doc._fields['state'].get_description(env)).get(doc.state, doc.state or '')"/>
+                                                <t t-if="doc.is_overdue"><span style="color: #C62828; font-weight: bold;">【逾期】</span></t>
+                                            </td>
+                                        </tr>
+                                    </t>
+                                </tbody>
+                            </table>
+
+                            <!-- 页脚统计 -->
+                            <p style="text-align: right; color: #888; font-size: 10px; margin-top: 20px;">
+                                生成时间: <t t-esc="datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')"/> | 合同管理 AI 系统
+                            </p>
+                        </div>
+                    </t>
+                </t>
+            </t>
+        </template>
+
+        <!-- 收付款台账 PDF 打印动作 -->
+        <record id="action_report_contract_plan_pdf" model="ir.actions.report">
+            <field name="name">收付款台账 PDF</field>
+            <field name="model">contract.payment.plan</field>
+            <field name="report_type">qweb-pdf</field>
+            <field name="report_name">contract_ai.report_contract_plan_pdf</field>
+            <field name="report_file">contract_plan</field>
+            <field name="print_report_name">'收付款台账_' + time.strftime('%Y%m%d_%H%M%S')</field>
+            <field name="binding_model_id" ref="model_contract_payment_plan"/>
+            <field name="binding_type">report</field>
+        </record>
+
+        <!-- ═══ 报表 5：相对方名册 PDF ═══ -->
+        <template id="report_contract_counterparty_pdf">
+            <t t-call="web.html_container">
+                <t t-foreach="docs" t-as="doc">
+                    <t t-call="web.external_layout">
+                        <div class="page">
+                            <h2 style="border-bottom: 3px solid #2E4057; padding-bottom: 10px; color: #2E4057;">
+                                <i class="fa fa-address-card-o"></i>
+                                相对方档案名册
+                            </h2>
+
+                            <!-- 统计 -->
+                            <div style="margin: 15px 0; display: flex; gap: 20px;">
+                                <div style="flex: 1; background: #E8F0FE; padding: 12px; border-radius: 6px;">
+                                    <div style="color: #666; font-size: 12px;">相对方总数</div>
+                                    <div style="font-size: 20px; font-weight: bold; color: #2E4057;">
+                                        <t t-esc="len(docs)"/>
+                                    </div>
+                                </div>
+                                <div style="flex: 1; background: #E8F5E9; padding: 12px; border-radius: 6px;">
+                                    <div style="color: #666; font-size: 12px;">公司/企业</div>
+                                    <div style="font-size: 20px; font-weight: bold; color: #2E7D32;">
+                                        <t t-esc="sum(1 for d in docs if d.party_type == 'company')"/>
+                                    </div>
+                                </div>
+                                <div style="flex: 1; background: #FFF8E1; padding: 12px; border-radius: 6px;">
+                                    <div style="color: #666; font-size: 12px;">个人</div>
+                                    <div style="font-size: 20px; font-weight: bold; color: #E65100;">
+                                        <t t-esc="sum(1 for d in docs if d.party_type == 'individual')"/>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 名册明细 -->
+                            <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 10px;">
+                                <thead>
+                                    <tr style="background: #2E4057; color: white;">
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">相对方名称</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">主体类型</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">信用代码/税号</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">法定代表人</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">联系人</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">联系电话</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px; text-align: center;">关联合同数</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">备注</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <t t-foreach="docs" t-as="doc">
+                                        <tr style="background: {'#f9f9f9' if doc_index % 2 else 'white'};">
+                                            <td style="border: 1px solid #ddd; padding: 4px; font-weight: bold;"><t t-esc="doc.name or ''"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;">
+                                                <t t-esc="dict(doc._fields['party_type'].get_description(env)).get(doc.party_type, doc.party_type or '')"/>
+                                            </td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;"><t t-esc="doc.unified_social_code or doc.tax_number or '/'"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;"><t t-esc="doc.legal_representative or '/'"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;"><t t-esc="doc.contact_name or '/'"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;"><t t-esc="doc.contact_phone or '/'"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px; text-align: center;"><t t-esc="doc.contract_count"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;">
+                                                <t t-if="doc.is_internal"><span style="color: #2E7D32; font-weight: bold;">内部主体</span></t>
+                                                <t t-else="">/</t>
+                                            </td>
+                                        </tr>
+                                    </t>
+                                </tbody>
+                            </table>
+
+                            <!-- 页脚统计 -->
+                            <p style="text-align: right; color: #888; font-size: 10px; margin-top: 20px;">
+                                生成时间: <t t-esc="datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')"/> | 合同管理 AI 系统
+                            </p>
+                        </div>
+                    </t>
+                </t>
+            </t>
+        </template>
+
+        <!-- 相对方名册 PDF 打印动作 -->
+        <record id="action_report_contract_counterparty_pdf" model="ir.actions.report">
+            <field name="name">相对方名册 PDF</field>
+            <field name="model">contract.counterparty</field>
+            <field name="report_type">qweb-pdf</field>
+            <field name="report_name">contract_ai.report_contract_counterparty_pdf</field>
+            <field name="report_file">contract_counterparty</field>
+            <field name="print_report_name">'相对方名册_' + time.strftime('%Y%m%d')</field>
+            <field name="binding_model_id" ref="model_contract_counterparty"/>
+            <field name="binding_type">report</field>
+        </record>
+
+        <!-- ═══ 报表 6：签约方名册 PDF ═══ -->
+        <template id="report_contract_signatory_pdf">
+            <t t-call="web.html_container">
+                <t t-foreach="docs" t-as="doc">
+                    <t t-call="web.external_layout">
+                        <div class="page">
+                            <h2 style="border-bottom: 3px solid #2E4057; padding-bottom: 10px; color: #2E4057;">
+                                <i class="fa fa-user-circle-o"></i>
+                                签约方档案名册
+                            </h2>
+
+                            <!-- 明细 -->
+                            <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-top: 15px;">
+                                <thead>
+                                    <tr style="background: #2E4057; color: white;">
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">姓名</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">部门</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">职务/岗位</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">公司代码</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">手机号码</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">电子邮箱</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px;">印章名称</th>
+                                        <th style="border: 1px solid #ddd; padding: 5px 4px; text-align: center;">已签合同数</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <t t-foreach="docs" t-as="doc">
+                                        <tr style="background: {'#f9f9f9' if doc_index % 2 else 'white'};">
+                                            <td style="border: 1px solid #ddd; padding: 4px; font-weight: bold;"><t t-esc="doc.name or ''"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;"><t t-esc="doc.department or '/'"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;"><t t-esc="doc.job_title or '/'"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;"><t t-esc="doc.company_code or '/'"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;"><t t-esc="doc.mobile or doc.phone or '/'"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;"><t t-esc="doc.email or '/'"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px;"><t t-esc="doc.seal_name or '/'"/></td>
+                                            <td style="border: 1px solid #ddd; padding: 4px; text-align: center;"><t t-esc="doc.contract_count"/></td>
+                                        </tr>
+                                    </t>
+                                </tbody>
+                            </table>
+
+                            <!-- 页脚统计 -->
+                            <p style="text-align: right; color: #888; font-size: 10px; margin-top: 20px;">
+                                生成时间: <t t-esc="datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')"/> | 合同管理 AI 系统
+                            </p>
+                        </div>
+                    </t>
+                </t>
+            </t>
+        </template>
+
+        <!-- 签约方名册 PDF 打印动作 -->
+        <record id="action_report_contract_signatory_pdf" model="ir.actions.report">
+            <field name="name">签约方名册 PDF</field>
+            <field name="model">contract.signatory</field>
+            <field name="report_type">qweb-pdf</field>
+            <field name="report_name">contract_ai.report_contract_signatory_pdf</field>
+            <field name="report_file">contract_signatory</field>
+            <field name="print_report_name">'签约方名册_' + time.strftime('%Y%m%d')</field>
+            <field name="binding_model_id" ref="model_contract_signatory"/>
             <field name="binding_type">report</field>
         </record>
 

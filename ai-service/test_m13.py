@@ -170,8 +170,9 @@ def test_happy_path_first_attempt():
     print(f"  ✅ PromptManager.render 2 次 + RAG 范例已拼入 extract prompt")
 
     # ── 验证 to_api_dict ──
+    # M21 起 to_api_dict 拍平 fields（main.py 统一在 data["extraction"] 下再包一层）
     api_dict = result.to_api_dict()
-    assert "extraction" in api_dict
+    assert "contract_name" in api_dict
     assert "confidence" in api_dict
     assert "attempt_count" in api_dict
     assert "elapsed_seconds" in api_dict
@@ -323,14 +324,19 @@ def test_llm_exception_all_retries_exhausted():
     assert mock_llm.chat.call_count == 3, f"LLM 应被调用 3 次后耗尽重试，实际 {mock_llm.chat.call_count}"
     assert result.attempt_count == 3
     assert result.llm_failed == True
-    # 兜底 fields 特征：confidence=0.1，partner_a/b 为 None
+    # M21 兜底特征：正则抢救结构化字段（有据可查）+ is_fallback 强制低置信走人工
+    assert result.is_fallback is True
+    assert result.system_confidence <= 0.30
     assert result.fields["confidence"] == 0.1
-    assert result.fields["partner_a"] is None
+    # contract_name 不再冒充（原文截断会污染台账）→ None，由 critical_missing 拦下
+    assert result.fields["contract_name"] is None
+    # 甲乙方/金额/日期等结构化字段由正则从原文抢救（postprocess_fill）
+    assert result.fields["partner_a"] == "北京科技有限公司"
     assert result.fields["contract_type"] == "采购合同"  # 保留用户传入的类型
     assert len(result.validation_errors) > 0
     assert any("LLM 调用异常" in e for e in result.validation_errors)
 
-    print(f"  ✅ 3 次 LLM 异常 → 兜底: attempts={result.attempt_count}, llm_failed=True, confidence={result.fields['confidence']}")
+    print(f"  ✅ 3 次 LLM 异常 → 正则抢救兜底: attempts={result.attempt_count}, llm_failed=True, is_fallback=True")
     print(f"  ✅ validation_errors 包含 LLM 异常信息")
     print("  🟢 测试 6 通过\n")
 
@@ -390,24 +396,27 @@ def test_business_validate():
     assert any("不合法" in e for e in errors), f"应捕获非法日期值: {errors}"
     print(f"  ✅ 非法日期值被捕获: {errors[0]}")
 
-    # ── 金额大写不一致 → 仅 WARNING，不触发 retry ──
+    # ── 金额大写不一致 → M21 硬错误（触发重试自我纠正）──
+    # 旧版仅 WARNING；M21 统一校验器将其升级为可重试 errors
     bad_amount = ContractExtraction(
         contract_name="test", partner_a="A", partner_b="B",
         contract_type="采购合同", confidence=0.9,
         amount=500000.0,
-        amount_uppercase="人民币壹佰万元整",   # 算法会警告但不进 errors
+        amount_uppercase="人民币壹佰万元整",   # 与 amount 不一致 → error
     )
-    errors = ContractExtractor._business_validate(bad_amount, "")
-    assert errors == [], f"金额大写不一致仅 WARNING 不进 errors，实际 {errors}"
-    print(f"  ✅ 金额大写不一致 → 仅 WARNING，不触发 retry")
+    errors = ContractExtractor._business_validate(
+        bad_amount, "test 甲方：A 乙方：B 合同总价款：人民币壹佰万元整"
+    )
+    assert any("金额交叉不一致" in e for e in errors), f"金额交叉不一致应为硬错误: {errors}"
+    print(f"  ✅ 金额大写交叉不一致 → 硬错误触发重试")
 
-    # ── 日期为 None 的字段不应报错 ──
+    # ── 日期为 None 的字段不应报错（其余字段有原文依据）──
     ok = ContractExtraction(
         contract_name="test", partner_a="A", partner_b="B",
         contract_type="采购合同", confidence=0.9,
         sign_date=None, effective_date=None, expire_date=None,
     )
-    errors = ContractExtractor._business_validate(ok, "")
+    errors = ContractExtractor._business_validate(ok, "test 甲方：A 乙方：B")
     assert errors == [], f"日期为 None 不应报错: {errors}"
     print(f"  ✅ 日期为 None 不报错")
 

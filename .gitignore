@@ -2,32 +2,49 @@
 # .gitignore — 合同管理系统
 # ═══════════════════════════════════════════
 
-# ── 环境变量 ──
+# ── 环境变量（真实密钥，绝不入库；.env.example 模板保留提交）──
 .env
 .env.local
+.env.production
 
-# ── Docker 卷数据 ──
+# ── Docker 卷数据（运行时生成，体积大且含业务数据）──
 chroma_data/
 odoo_data/
+
+# ── 测试数据（合成合同 PDF/评估用例，可由 scripts/generate_manual_test_pdfs.py 再生成）──
+test_pdfs/
+ai-service/test_pdfs/
+
+# ── 运行时产物（评估报告/OCR 结果，带时间戳可再生成）──
+ai-service/reports/
+*.log
+
+# ── 字体文件（大文件且有版权风险：simsun/simhei 为微软/方正版权字体）──
+*.ttf
+*.ttc
+*.otf
+
+# ── Python 运行时/缓存（可再生成）──
 __pycache__/
 *.pyc
-
-# ── IDE ──
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# ── OS ──
-.DS_Store
-Thumbs.db
-
-# ── Python ──
+.pytest_cache/
 *.egg-info/
 .venv/
 venv/
 build/
 dist/
+
+# ── 运行时上传与附件（含真实用户合同，绝不入库）──
+uploads/
+attachments/
+
+# ── IDE / OS ──
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
 
 # ── Odoo ──
 odoo/logs/

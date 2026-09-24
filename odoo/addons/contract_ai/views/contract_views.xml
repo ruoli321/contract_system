@@ -60,6 +60,11 @@
                     <field name="partner_b"/>
                     <field name="amount"/>
                     <field name="date_signed"/>
+                    <field name="review_state" widget="badge"
+                           decoration-muted="review_state == 'none'"
+                           decoration-success="review_state == 'confirmed'"
+                           decoration-danger="review_state == 'pending'"
+                           optional="show"/>
                     <field name="state" widget="badge"/>
                 </tree>
             </field>
@@ -74,11 +79,20 @@
                     <header>
                         <button name="action_ai_extract" string="🤖 AI 自动提取"
                                 type="object" class="btn-primary"/>
+                        <button name="action_confirm_review" string="✅ 复核确认"
+                                type="object" class="btn-warning"
+                                invisible="review_state != 'pending'"/>
+                        <button name="action_reset_review" string="♻️ 重置复核"
+                                type="object" class="btn-secondary"
+                                invisible="review_state == 'none'"/>
                         <button name="generate_payment_plan" string="📋 自动生成计划"
                                 type="object" class="btn-secondary"
                                 invisible="state == 'draft'"/>
                         <button name="action_export_excel" string="📤 导出 Excel"
                                 type="object" class="btn-secondary"/>
+                        <button name="action_resplit_clauses" string="🧩 重新拆分条款"
+                                type="object" class="btn-secondary"
+                                invisible="state not in ('draft', 'approval')"/>
                         <button name="action_submit_approval" string="提交审批"
                                 type="object" class="btn-primary"
                                 invisible="state != 'draft'"/>
@@ -101,6 +115,20 @@
                                statusbar_visible="draft,approval,seal,archived,void"/>
                     </header>
 
+                    <!-- 质量门禁横幅：待复核风险醒目提示 -->
+                    <div class="alert alert-warning" role="alert"
+                         invisible="review_state != 'pending'"
+                         style="margin-bottom: 8px;">
+                        <b>⚠️ AI 质量门禁：以下内容需人工复核，确认前无法提交审批</b>
+                        <field name="review_reasons" nolabel="1" readonly="1"
+                               class="mt-2" style="background: transparent; border: none; padding-left: 12px;"/>
+                    </div>
+                    <div class="alert alert-success" role="alert"
+                         invisible="review_state != 'confirmed'"
+                         style="margin-bottom: 8px;">
+                        ✅ AI 提取结果已人工确认
+                    </div>
+
                     <notebook>
                         <!-- Tab 1: 基本信息 -->
                         <page string="📋 基本信息" name="basic">
@@ -118,6 +146,11 @@
                                            decoration-success="ai_extract_status == 'success'"
                                            decoration-danger="ai_extract_status == 'failed'"/>
                                     <field name="ai_extract_error" invisible="ai_extract_status != 'failed'"/>
+                                    <field name="review_state" widget="badge"
+                                           decoration-muted="review_state == 'none'"
+                                           decoration-success="review_state == 'confirmed'"
+                                           decoration-danger="review_state == 'pending'"/>
+                                    <field name="system_confidence"/>
                                     <field name="classify_confidence" invisible="1"/>
                                     <field name="extraction_confidence" invisible="1"/>
                                 </group>
@@ -208,14 +241,21 @@
                             </field>
                         </page>
 
-                        <!-- Tab 4: 合同条款 -->
+                        <!-- Tab 4: 合同条款（M24.1：顶部全文排版预览限高 + 列表含「条款正文」
+                             排版渲染列，点击行进对话框编辑） -->
                         <page string="📜 合同条款" name="clauses">
-                            <field name="clause_ids">
-                                <tree editable="bottom">
+                            <field name="clauses_preview_html" nolabel="1" readonly="1"
+                                   class="o_clause_preview_panel"
+                                   invisible="not clause_ids"/>
+                            <field name="clause_ids" nolabel="1">
+                                <tree>
                                     <field name="sort_order"/>
                                     <field name="name"/>
                                     <field name="clause_type"/>
-                                    <field name="content"/>
+                                    <field name="content_html" widget="html" string="条款正文"
+                                           class="o_clause_content_html"/>
+                                    <field name="content_preview" string="正文摘要" optional="hide"/>
+                                    <field name="source" optional="hide"/>
                                 </tree>
                             </field>
                         </page>
@@ -279,6 +319,9 @@
                     <filter name="seal" string="已用印" domain="[('state','=','seal')]"/>
                     <filter name="archived" string="已归档" domain="[('state','=','archived')]"/>
                     <separator/>
+                    <filter name="review_pending" string="⚠️ 待人工复核" domain="[('review_state','=','pending')]"/>
+                    <filter name="review_confirmed" string="✅ 已人工确认" domain="[('review_state','=','confirmed')]"/>
+                    <separator/>
                     <filter name="purchase" string="采购合同" domain="[('type','=','purchase')]"/>
                     <filter name="sale" string="销售合同" domain="[('type','=','sale')]"/>
                     <filter name="service" string="服务合同" domain="[('type','=','service')]"/>
@@ -286,6 +329,7 @@
                     <group expand="0" string="分组">
                         <filter name="group_state" string="状态" context="{'group_by':'state'}"/>
                         <filter name="group_type" string="类型" context="{'group_by':'type'}"/>
+                        <filter name="group_review_state" string="复核状态" context="{'group_by':'review_state'}"/>
                     </group>
                 </search>
             </field>

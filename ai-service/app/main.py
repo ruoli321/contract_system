@@ -17,6 +17,7 @@
 #   POST /api/contract/parse     — 纯 PDF 解析（调试/独立使用）
 #   GET  /api/vector/stats       — 向量库统计（调试）
 # ═══════════════════════════════════════════════════════════════════
+import asyncio
 import logging
 import time
 import traceback
@@ -29,9 +30,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .config import get_settings
+from .services.pdf_parser import EncryptedPdfError, OCREngineError
 from .services.payment_schedule import parse_payment_terms
 from .services.chinese_amount import chinese_uppercase_to_amount
 from .services.clause_segmenter import segment_clauses, build_elements
+from .services.validator import ValidationReport, check_payment_schedule
+from .services.gatekeeper import build_quality
+from .services.classifier import check_type_consistency
 
 # ── 日志 ──
 logging.basicConfig(
@@ -61,6 +66,22 @@ def _err(message: str, code: str = "INTERNAL_ERROR", elapsed_ms: float = 0.0) ->
         "error": {"code": code, "message": message},
         "elapsed_ms": round(elapsed_ms, 1),
     }
+
+
+class PipelineError(Exception):
+    """重管线错误（携带 HTTP status + 业务 code，端点统一映射响应）
+
+    背景：/parse 与 /extract 的同步重活（PDF 解析/OCR/LLM 调用）已整体
+    搬进 asyncio.to_thread 的线程池——旧实现 async def 端点里直接跑
+    15~50s 的同步 OCR 会阻塞整个事件循环（健康检查/其他请求全部无响应）。
+    线程内的失败统一抛 PipelineError，async 端点捕获后映射 HTTP 响应。
+    """
+
+    def __init__(self, message: str, code: str, status: int = 500):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+        self.status = status
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -271,39 +292,69 @@ async def health():
 # 2. PDF 解析（独立端点，调试用）
 # ═══════════════════════════════════════════════════════════════════
 
+@app.post("/api/contract/segment")
+async def segment_contract_text(payload: dict):
+    """合同全文文本 → 条款分段（规则式，零 LLM 成本）
+
+    M24：供 Odoo 侧「重新拆分条款」/存量合同修复调用，与 /extract 的
+    clauses 输出同构：[{sort_order, name, content, clause_type}]
+    """
+    t0 = time.time()
+    text = str((payload or {}).get("text") or "")
+    if not text.strip():
+        return JSONResponse(
+            status_code=400,
+            content=_err("text 不能为空", "EMPTY_TEXT", (time.time() - t0) * 1000),
+        )
+    clauses = segment_clauses(text)
+    return _ok({"clauses": clauses, "count": len(clauses)}, elapsed_ms=(time.time() - t0) * 1000)
+
+
 @app.post("/api/contract/parse")
 async def parse_pdf(file: UploadFile = File(...)):
     """上传 PDF → 自动分流（文字版/扫描版）→ 返回文本 + 分流判定"""
     t0 = time.time()
     logger.info(f"📄 PDF 解析请求 | filename={file.filename}")
 
+    parser = _services["pdf_parser"]
+    pdf_bytes = await file.read()
+    if not pdf_bytes:
+        return JSONResponse(status_code=400, content=_err("上传文件为空", "EMPTY_FILE", (time.time() - t0) * 1000))
+
+    # 同步重活（解析/OCR 最长数十秒）扔线程池，不阻塞事件循环
     try:
-        parser = _services["pdf_parser"]
-        pdf_bytes = await file.read()
-        if not pdf_bytes:
-            return JSONResponse(status_code=400, content=_err("上传文件为空", "EMPTY_FILE", (time.time() - t0) * 1000))
-
-        result = parser.extract_text(pdf_bytes)
-        data = {
-            "filename": file.filename,
-            "text": result.text,
-            "pdf_type": result.pdf_type,
-            "is_scanned_pdf": result.pdf_type == "scanned",
-            "char_count": len(result.text),
-            "tables": (
-                [{"page": t.page, "rows": t.rows} for t in result.tables]
-                if result.tables
-                else []
-            ),
-        }
-        elapsed = (time.time() - t0) * 1000
-        logger.info(f"  ✅ PDF 解析完成 | type={result.pdf_type} | chars={len(result.text)} | {elapsed:.0f}ms")
-        return _ok(data, elapsed_ms=elapsed)
-
+        result = await asyncio.to_thread(parser.extract_text, pdf_bytes)
+    except EncryptedPdfError as e:
+        return JSONResponse(
+            status_code=400,
+            content=_err(str(e), "PDF_ENCRYPTED", (time.time() - t0) * 1000),
+        )
+    except OCREngineError as e:
+        logger.error(f"OCR 引擎不可用 | filename={file.filename}: {e}")
+        return JSONResponse(
+            status_code=500,
+            content=_err(str(e), "OCR_UNAVAILABLE", (time.time() - t0) * 1000),
+        )
     except Exception as e:
         elapsed = (time.time() - t0) * 1000
         logger.exception(f"PDF 解析失败 | filename={file.filename}")
         return JSONResponse(status_code=500, content=_err(f"PDF 解析失败: {str(e)}", "PDF_PARSE_FAILED", elapsed))
+
+    data = {
+        "filename": file.filename,
+        "text": result.text,
+        "pdf_type": result.pdf_type,
+        "is_scanned_pdf": result.pdf_type == "scanned",
+        "char_count": len(result.text),
+        "tables": [
+            {"page": t.page_num, "rows": t.rows}
+            for t in result.tables
+        ],
+        "quality": result.quality,
+    }
+    elapsed = (time.time() - t0) * 1000
+    logger.info(f"  ✅ PDF 解析完成 | type={result.pdf_type} | chars={len(result.text)} | {elapsed:.0f}ms")
+    return _ok(data, elapsed_ms=elapsed)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -353,50 +404,38 @@ async def classify(req: ClassifyRequest):
 # 4. 字段提取（PDF 上传 → 解析 → 分类 → RAG 提取 → 全流程）
 # ═══════════════════════════════════════════════════════════════════
 
-@app.post("/api/contract/extract")
-async def extract(
-    file: UploadFile = File(...),
-    contract_type: Optional[str] = Query(default=None, description="预设合同类型，不传则内部自动分类"),
-    use_rag: bool = Query(default=True, description="是否启用 RAG few-shot 增强"),
-    top_k_examples: int = Query(default=3, ge=1, le=10, description="RAG 检索范例数量"),
-):
+# ── 同步管线：解析 → 分类 → 提取 → 守门（在线程池执行，见 PipelineError 注释）──
+def _run_extract_pipeline(parser, pdf_bytes: bytes, contract_type: Optional[str],
+                          use_rag: bool, top_k_examples: int) -> dict:
     """
-    一键全流程：上传 PDF → 解析 → 自动分类（可选覆盖） → RAG 增强字段提取
+    /extract 全流程同步实现。阻塞操作（fitz 解析、PaddleOCR 数十秒、
+    LLM 调用最长数分钟）全部发生在线程池线程内，事件循环不被占用。
 
-    返回：
-      - parse_result: PDF 解析结果（分流类型、字符数）
-      - classify:     分类结果（类型 + 置信度 + 双通道详情）
-      - extraction:   字段提取结果（15 字段 + 结构化日志）
+    Raises:
+        PipelineError: 携带 HTTP status + 业务 code 的管线失败
     """
     t0 = time.time()
-    logger.info(
-        f"📋 提取请求 | filename={file.filename} | "
-        f"contract_type={contract_type or 'AUTO'} | use_rag={use_rag} | top_k={top_k_examples}"
-    )
 
-    # ── Step 1: PDF 解析（单独 try，返回精确 code）──
-    parser = _services["pdf_parser"]
-    pdf_bytes = await file.read()
-    if not pdf_bytes:
-        return JSONResponse(status_code=400, content=_err("上传文件为空", "EMPTY_FILE", (time.time() - t0) * 1000))
-
+    # ── Step 1: PDF 解析 ──
     try:
         parse_result = parser.extract_text(pdf_bytes)
+    except EncryptedPdfError as e:
+        raise PipelineError(str(e), "PDF_ENCRYPTED", status=400) from e
+    except OCREngineError as e:
+        raise PipelineError(str(e), "OCR_UNAVAILABLE", status=500) from e
     except Exception as e:
-        elapsed = (time.time() - t0) * 1000
-        logger.exception(f"PDF 解析失败 | filename={file.filename}")
-        return JSONResponse(status_code=500, content=_err(f"PDF 解析失败: {str(e)}", "PDF_PARSE_FAILED", elapsed))
+        logger.exception("PDF 解析失败")
+        raise PipelineError(f"PDF 解析失败: {str(e)}", "PDF_PARSE_FAILED", status=500) from e
 
     text = parse_result.text
     logger.info(f"  📄 PDF 解析 | type={parse_result.pdf_type} | chars={len(text)}")
 
     if len(text.strip()) < 10:
-        return JSONResponse(
-            status_code=400,
-            content=_err("PDF 解析后文本过短（<10 字符），可能是扫描版 PDF 需要 OCR", "TEXT_TOO_SHORT", (time.time() - t0) * 1000),
+        raise PipelineError(
+            "PDF 解析后文本过短（<10 字符），可能是扫描版 PDF 需要 OCR",
+            "TEXT_TOO_SHORT", status=400,
         )
 
-    # ── Step 2+3: 分类 + 提取（共享 LLM 依赖，合在一个 try 里）──
     try:
         _, classifier, extractor = _get_llm_client()
         if contract_type:
@@ -461,43 +500,111 @@ async def extract(
                 }
         extract_data["amount_cross_check"] = amount_check
 
+        # ── M21 质检守门：quality 块生成（Odoo 侧据此走人工审核闭环）──
+        # 1) 收付款计划合计校验（业财红线：合计≠合同金额 → 禁止生成计划）
+        schedule_ok, schedule_msg = check_payment_schedule(
+            payment_schedule, extract_data.get("amount")
+        )
+        extract_data["payment_schedule_check"] = {
+            "ok": schedule_ok, "message": schedule_msg,
+        }
+
+        # 2) 分类可靠性信号（低置信/仲裁未果/双通道冲突）+ 提取后强矛盾反查
+        classify_review_reasons = list(classify_result.review_reasons or [])
+        classify_review_reasons.extend(
+            check_type_consistency(effective_ctype, text)
+        )
+
+        # 3) 汇总 validator 报告 + 上述信号 → quality 块
+        validation_report = ValidationReport(
+            errors=extract_result.validation_errors,
+            fatal_errors=extract_result.fatal_errors,
+            warnings=extract_result.warnings,
+            field_evidence=extract_result.field_evidence,
+            critical_missing=extract_result.critical_missing,
+            system_confidence=extract_result.system_confidence,
+            is_fallback=extract_result.is_fallback,
+        )
+        quality = build_quality(
+            validation_report,
+            schedule_ok=schedule_ok,
+            schedule_message=schedule_msg,
+            classify_review_reasons=classify_review_reasons,
+            parse_quality=getattr(parse_result, "quality", None),
+        )
+
         # 合同条款分段 + 元素结构化（规则式，零 LLM 成本；Odoo 侧据此自动生成条款/元素记录）
         clauses = segment_clauses(text)
         elements = build_elements(extract_data, text, clauses)
 
-        # 补充 classify 结果到同一响应
-        data = {
-            "filename": file.filename,
+        return {
             "parse_result": {
                 "pdf_type": parse_result.pdf_type,
                 "is_scanned_pdf": parse_result.pdf_type == "scanned",
                 "char_count": len(text),
+                # 版面分析产物：表格还原（PP-Structure）接通给下游
+                "tables": [
+                    {"page": t.page_num, "rows": t.rows, "html": t.html}
+                    for t in parse_result.tables
+                ],
             },
             "classify": classify_data,
             "extraction": extract_data,
             "clauses": clauses,
             "elements": elements,
+            "quality": quality,
         }
-
-        elapsed = (time.time() - t0) * 1000
-        logger.info(
-            f"  ✅ 全流程完成 | type={effective_ctype} | "
-            f"conf={extract_result.confidence:.2f} | "
-            f"attempts={extract_result.attempt_count} | rag={extract_result.used_rag} | "
-            f"clauses={len(clauses)} | elements={len(elements)} | "
-            f"{elapsed:.0f}ms"
-        )
-        return _ok(data, elapsed_ms=elapsed)
-
+    except PipelineError:
+        raise
     except HTTPException:
         raise
     except Exception as e:
-        elapsed = (time.time() - t0) * 1000
-        logger.exception(f"提取全流程失败 | filename={file.filename}")
-        return JSONResponse(
-            status_code=500,
-            content=_err(f"提取失败: {str(e)}", "EXTRACT_FAILED", elapsed),
+        logger.exception("提取全流程失败")
+        raise PipelineError(f"提取失败: {str(e)}", "EXTRACT_FAILED", status=500) from e
+    finally:
+        logger.info(f"  ⏱️ 同步管线耗时 {time.time() - t0:.1f}s")
+
+
+@app.post("/api/contract/extract")
+async def extract(
+    file: UploadFile = File(...),
+    contract_type: Optional[str] = Query(default=None, description="预设合同类型，不传则内部自动分类"),
+    use_rag: bool = Query(default=True, description="是否启用 RAG few-shot 增强"),
+    top_k_examples: int = Query(default=3, ge=1, le=10, description="RAG 检索范例数量"),
+):
+    """
+    一键全流程：上传 PDF → 解析 → 自动分类（可选覆盖） → RAG 增强字段提取
+
+    返回：
+      - parse_result: PDF 解析结果（分流类型、字符数、表格还原）
+      - classify:     分类结果（类型 + 置信度 + 双通道详情）
+      - extraction:   字段提取结果（15 字段 + 结构化日志）
+    """
+    t0 = time.time()
+    logger.info(
+        f"📋 提取请求 | filename={file.filename} | "
+        f"contract_type={contract_type or 'AUTO'} | use_rag={use_rag} | top_k={top_k_examples}"
+    )
+
+    parser = _services["pdf_parser"]
+    pdf_bytes = await file.read()
+    if not pdf_bytes:
+        return JSONResponse(status_code=400, content=_err("上传文件为空", "EMPTY_FILE", (time.time() - t0) * 1000))
+
+    # 重管线整体进线程池（同步函数内部含 LLM 调用，最长数分钟）
+    try:
+        data = await asyncio.to_thread(
+            _run_extract_pipeline,
+            parser, pdf_bytes, contract_type, use_rag, top_k_examples,
         )
+    except PipelineError as e:
+        return JSONResponse(
+            status_code=e.status,
+            content=_err(e.message, e.code, (time.time() - t0) * 1000),
+        )
+
+    data["filename"] = file.filename
+    return _ok(data, elapsed_ms=(time.time() - t0) * 1000)
 
 
 # ═══════════════════════════════════════════════════════════════════

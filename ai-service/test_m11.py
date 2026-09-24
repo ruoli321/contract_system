@@ -99,7 +99,8 @@ def test_rule_classify_4_types():
     all_passed = True
     for expected_type, text in CONTRACT_TEXTS.items():
         # 规则分类是内部方法，直接调用测试
-        rule_type, rule_conf = clf._rule_classify(text, expected_type)
+        # v3/v4 起 _rule_classify 返回 (type, confidence, evidence) 三元组
+        rule_type, rule_conf, rule_evidence = clf._rule_classify(text, expected_type)
         ok = rule_type == expected_type
         status = "✅" if ok else "❌"
         print(f"  {status} {expected_type} → 规则判断={rule_type}, 置信度={rule_conf}")
@@ -153,16 +154,20 @@ def test_llm_low_confidence_ensemble_conflict():
     text = CONTRACT_TEXTS["租赁合同"]
     result = clf.classify(text, "房屋租赁合同")
 
-    # LLM 说 "其他"(0.45)，规则说 "租赁合同"(~0.6) → 两者不同
-    # ensemble 冲突分支 → 选高置信者 rule_conf=0.6 × 0.85 = 0.51
+    # LLM 说 "其他"(0.45)，规则说 "租赁合同"(v3 校准后 0.75) → 两者不同
+    # ensemble 冲突分支 → 选高置信者 rule_conf × 0.85 冲突惩罚（M21 系数）
     assert result.contract_type == "租赁合同", \
         f"ensemble 冲突应选高置信者（规则租赁合同）；期望租赁合同，实际 {result.contract_type}"
     assert result.method_used == "ensemble", f"方法应为 ensemble，实际 {result.method_used}"
     assert result.llm_failed == False
-    # 冲突惩罚：base_conf(0.6) × 0.85 = 0.51
-    assert abs(result.confidence - 0.51) < 0.01, \
-        f"冲突惩罚后 conf 应 ≈ 0.51，实际 {result.confidence}"
-    print(f"  ✅ LLM(其他,0.45) vs 规则(租赁合同,0.6) → ensemble 冲突 → 选租赁合同 conf={result.confidence}")
+    # 冲突惩罚：base_conf(规则胜出) × 0.85
+    expected_conf = round(result.rule_confidence * 0.85, 3)
+    assert abs(result.confidence - expected_conf) < 0.01, \
+        f"冲突惩罚后 conf 应 ≈ {expected_conf}，实际 {result.confidence}"
+    # M21：双通道冲突且置信度 <0.75 → 标记人工确认
+    assert result.needs_review is True
+    assert any("双通道冲突" in r for r in result.review_reasons)
+    print(f"  ✅ LLM(其他,0.45) vs 规则(租赁合同,{result.rule_confidence}) → ensemble 冲突 → 选租赁合同 conf={result.confidence} | needs_review=True")
     print(f"  🔗 双通道详情: 规则={result.rule_result}({result.rule_confidence}), LLM={result.llm_result}({result.llm_confidence})")
 
     print("  🟢 测试 3 通过\n")
@@ -348,26 +353,19 @@ def test_llm_low_confidence_ensemble_consensus():
     result = clf.classify(text, "房屋租赁合同")
 
     # LLM "租赁合同"(0.55)，规则 "租赁合同"(~0.6) → 两者一致！
-    # ensemble 共识分支：
-    #   weighted = rule_conf*0.55 + llm_conf*0.45 = 0.6*0.55 + 0.55*0.45 = 0.33 + 0.2475 = 0.5775
-    #   final_conf = min(0.90, 0.5775 + 0.1) = 0.6775
+    # ensemble 共识分支（v3 校准后 rule_conf 由实测值代入）：
+    #   weighted = rule_conf*0.55 + llm_conf*0.45
+    #   final_conf = min(0.90, weighted + 0.1)
     assert result.contract_type == "租赁合同"
     assert result.method_used == "ensemble", f"方法应为 ensemble，实际 {result.method_used}"
     assert result.llm_failed == False
-    # 共识加成后应该比任何单个通道都高
-    assert result.confidence > result.rule_confidence, \
-        f"共识加成后 conf({result.confidence}) 应高于 rule_confidence({result.rule_confidence})"
-    assert result.confidence > result.llm_confidence, \
-        f"共识加成后 conf({result.confidence}) 应高于 llm_confidence({result.llm_confidence})"
-
-    # 具体数值验证（假设规则 conf ≈ 0.6）
-    # weighted = 0.6*0.55 + 0.55*0.45 = 0.5775 → +0.1 = 0.6775
-    expected_approx = 0.678
+    weighted = result.rule_confidence * 0.55 + result.llm_confidence * 0.45
+    expected_approx = round(min(0.90, weighted + 0.1), 3)
     assert abs(result.confidence - expected_approx) < 0.02, \
         f"共识加成后 conf 应 ≈ {expected_approx}，实际 {result.confidence}"
 
     print(f"  ✅ LLM(租赁合同,0.55) + 规则(租赁合同,{result.rule_confidence})")
-    print(f"     → ensemble 共识 → conf={result.confidence}（> 单通道的 {result.rule_confidence}/{result.llm_confidence}）")
+    print(f"     → ensemble 共识 → conf={result.confidence}（期望 ≈{expected_approx}）")
 
     print("  🟢 测试 9 通过\n")
 

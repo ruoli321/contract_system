@@ -2,7 +2,11 @@
 # contract.template  — 合同模板
 # contract.clause    — 合同条款（既可属于模板也可属于具体合同）
 # ════════════════════════════════════════════════
+from markupsafe import escape
+
 from odoo import models, fields, api, _
+
+from .clause_rendering import render_clause_text_to_html, render_clause_preview
 
 
 class ContractTemplate(models.Model):
@@ -12,7 +16,8 @@ class ContractTemplate(models.Model):
     _order = "name"
 
     # ── 基本信息 ──
-    name = fields.Char(string="模板名称", required=True, tracking=True)
+    # 注：本模型未继承 mail.thread（无 chatter），不支持 tracking，勿加 tracking=True
+    name = fields.Char(string="模板名称", required=True)
     type = fields.Selection(
         [
             ("purchase", "采购合同"),
@@ -23,13 +28,13 @@ class ContractTemplate(models.Model):
             ("consulting", "咨询合同"),
             ("other", "其他"),
         ],
-        string="适用合同类型", required=True, tracking=True,
+        string="适用合同类型", required=True,
     )
     description = fields.Text(string="模板说明")
 
     # ── 版本管理 ──
-    version = fields.Char(string="版本号", default="v1.0", tracking=True)
-    is_active = fields.Boolean(string="启用", default=True, tracking=True)
+    version = fields.Char(string="版本号", default="v1.0")
+    is_active = fields.Boolean(string="启用", default=True)
 
     # ── 使用统计 ──
     usage_count = fields.Integer(string="使用次数", default=0)
@@ -41,11 +46,33 @@ class ContractTemplate(models.Model):
     clause_count = fields.Integer(
         string="条款数", compute="_compute_clause_count",
     )
+    # ── 模板条款全文排版预览（M23：纯文本 → 结构化 HTML，展示层渲染） ──
+    clauses_preview_html = fields.Html(
+        string="条款排版预览", compute="_compute_clauses_preview_html",
+        readonly=True, sanitize=False, copy=False,
+    )
 
     @api.depends("clause_ids")
     def _compute_clause_count(self):
         for rec in self:
             rec.clause_count = len(rec.clause_ids)
+
+    @api.depends("clause_ids.sort_order", "clause_ids.name", "clause_ids.content")
+    def _compute_clauses_preview_html(self):
+        for rec in self:
+            clauses = rec.clause_ids.sorted(key=lambda c: (c.sort_order, c.id))
+            parts = []
+            for idx, clause in enumerate(clauses, start=1):
+                title = "%d. %s" % (idx, clause.name or "条款 %d" % idx)
+                parts.append(
+                    '<section class="clause-section">'
+                    '<h3 class="clause-title">%s</h3>%s</section>'
+                    % (escape(title), clause.content_html or "")
+                )
+            if not parts:
+                rec.clauses_preview_html = '<p class="clause-p">暂无模板条款</p>'
+            else:
+                rec.clauses_preview_html = "".join(parts)
 
 
 class ContractClause(models.Model):
@@ -78,6 +105,7 @@ class ContractClause(models.Model):
     name = fields.Char(string="条款标题", required=True)
     clause_type = fields.Selection(
         [
+            ("main", "主条款"),
             ("payment", "付款条款"),
             ("liability", "违约责任"),
             ("dispute", "争议解决"),
@@ -91,6 +119,17 @@ class ContractClause(models.Model):
         string="条款类型", default="other",
     )
     content = fields.Text(string="条款正文", required=True)
+    # ── 排版展示层字段（M23，只读渲染，不改动 content 纯文本存储） ──
+    # 结构化排版预览：编号标题识别（第X条/一、/（一）/1.）→ 加粗层级 + 段落缩进
+    content_html = fields.Html(
+        string="条款正文（排版预览）", compute="_compute_content_html",
+        readonly=True, sanitize=False, copy=False,
+    )
+    # 列表视图单行摘要：取正文首行截断，避免长文在 tree 单元格平铺
+    content_preview = fields.Char(
+        string="正文摘要", compute="_compute_content_preview",
+        readonly=True, copy=False,
+    )
     sort_order = fields.Integer(string="排序", default=10)
 
     # ── 条款属性 ──
@@ -111,3 +150,16 @@ class ContractClause(models.Model):
         string="已修改", default=False, copy=False,
         help="从模板复制到合同后是否被编辑过",
     )
+
+    # ════════════════════════════════════════════════
+    # 排版渲染（M23）
+    # ════════════════════════════════════════════════
+    @api.depends("content")
+    def _compute_content_html(self):
+        for rec in self:
+            rec.content_html = render_clause_text_to_html(rec.content)
+
+    @api.depends("content")
+    def _compute_content_preview(self):
+        for rec in self:
+            rec.content_preview = render_clause_preview(rec.content)

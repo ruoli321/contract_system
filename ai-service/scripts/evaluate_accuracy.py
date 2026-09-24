@@ -40,41 +40,6 @@ EVAL_FIELDS = [
 ]
 
 
-def normalize(val):
-    """归一化：去空格、小写、统一处理"""
-    if val is None:
-        return ""
-    return str(val).strip().lower().replace(" ", "").replace("　", "")
-
-
-def field_match(pred, gold):
-    """判断字段是否匹配：精确 + 数值近似 + 日期语义等价 + 包含关系"""
-    if pred is None and gold is None:
-        return True
-    if pred is None or gold is None:
-        return False
-
-    np, ng = normalize(pred), normalize(gold)
-
-    # 数值字段：允许 ±2% 误差
-    try:
-        fp, fg = float(np), float(ng)
-        return abs(fp - fg) / max(abs(fg), 1) < 0.02
-    except (ValueError, TypeError):
-        pass
-
-    # 日期字段：统一成 YYYY-MM-DD 比较
-    import re
-    def normalize_date(s):
-        m = re.match(r"(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})", s)
-        if m:
-            return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-        return s
-
-    if re.match(r"\d{4}[-/年]", np) or re.match(r"\d{4}[-/年]", ng):
-        return normalize_date(np) == normalize_date(ng)
-
-    # 字符串字段：精确匹配 + 包含关系
     return np == ng or np in ng or ng in np
 
 

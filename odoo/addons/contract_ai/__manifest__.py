@@ -45,4 +45,10 @@
     "installable": True,
     "application": True,
     "auto_install": False,
+    # M23：条款排版样式（合同条款 Tab 预览面板 + 条款编辑对话框）
+    "assets": {
+        "web.assets_backend": [
+            "contract_ai/static/src/css/clause_display.css",
+        ],
+    },
 }

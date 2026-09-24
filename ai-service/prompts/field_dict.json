@@ -68,16 +68,16 @@
   },
 
   "extract_schema": {
-    "description": "合同字段提取输出 Schema（与 system_prompt 中的 JSON Schema 保持同步）",
+    "description": "合同字段提取输出 Schema（与 system_prompt 中的 JSON Schema 保持同步）。critical=true 表示业务关键字段：缺失时触发人工审核（validator/gatekeeper/Odoo 三处同源读取）",
     "fields": {
-      "contract_name": { "type": "string|null", "required": true, "desc": "合同标题/名称" },
+      "contract_name": { "type": "string|null", "required": true, "critical": true, "desc": "合同标题/名称" },
       "contract_code": { "type": "string|null", "required": false, "desc": "合同编号" },
-      "partner_a": { "type": "string|null", "required": true, "desc": "甲方全称" },
-      "partner_b": { "type": "string|null", "required": true, "desc": "乙方全称" },
-      "amount": { "type": "number|null", "required": false, "desc": "合同总金额" },
+      "partner_a": { "type": "string|null", "required": true, "critical": true, "desc": "甲方全称" },
+      "partner_b": { "type": "string|null", "required": true, "critical": true, "desc": "乙方全称" },
+      "amount": { "type": "number|null", "required": false, "critical": true, "desc": "合同总金额" },
       "amount_uppercase": { "type": "string|null", "required": false, "desc": "金额大写（如 人民币壹佰贰拾捌万元整）" },
       "currency": { "type": "string|null", "required": false, "desc": "货币代码 CNY/USD 等" },
-      "sign_date": { "type": "string|null", "required": false, "desc": "签订日期 YYYY-MM-DD" },
+      "sign_date": { "type": "string|null", "required": false, "critical": true, "desc": "签订日期 YYYY-MM-DD" },
       "effective_date": { "type": "string|null", "required": false, "desc": "生效日期" },
       "expire_date": { "type": "string|null", "required": false, "desc": "到期日期" },
       "contract_type": { "type": "enum", "required": true, "values": "contract_type.values", "desc": "合同类型" },

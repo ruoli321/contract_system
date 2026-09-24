@@ -29,16 +29,17 @@ from typing import Optional, TypedDict
 
 from langgraph.graph import StateGraph, END
 
+from ..services.validator import validate_extraction, CRITICAL_FIELDS
+
 logger = logging.getLogger("contract-graph")
 
 # 外层重试上限（ extractor 内层已有 MAX_RETRIES=3，这里只兜全局性失败）
 MAX_GRAPH_RETRIES = 2
 
-# 校验 Agent 审查的字段清单
-#   SCHEMA_REQUIRED：field_dict.json extract_schema.required（Schema 硬约束）
-#   BUSINESS_CRITICAL：业财一体化的关键字段（缺了无法生成收付款计划）
-SCHEMA_REQUIRED = ["contract_name", "partner_a", "partner_b"]
-BUSINESS_CRITICAL = ["amount", "sign_date"]
+# 校验 Agent 审查字段清单（M21 起单一数据源：field_dict.json critical 标记，
+# 由 validator.CRITICAL_FIELDS 导出，禁止在此硬编码）
+SCHEMA_REQUIRED = [f for f in CRITICAL_FIELDS if f not in ("amount", "sign_date")]
+BUSINESS_CRITICAL = [f for f in CRITICAL_FIELDS if f in ("amount", "sign_date")]
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -117,6 +118,7 @@ def build_contract_graph(classifier, extractor):
         }
 
     # ── 节点 3：校验 Agent（独立审查，不看 extractor 内部状态）──
+    # M21：调统一校验器（与主链路同一实现，消除双份校验漂移）
     def validate_node(state: ContractState) -> ContractState:
         result = state.get("result") or {}
         errors: list[str] = []
@@ -126,9 +128,13 @@ def build_contract_graph(classifier, extractor):
         for fname in BUSINESS_CRITICAL:
             if not result.get(fname):
                 errors.append(f"业务关键字段缺失: {fname}")
-        amount = result.get("amount")
-        if amount is not None and (not isinstance(amount, (int, float)) or amount < 0):
-            errors.append(f"金额异常: {amount}")
+        # 全量证据/交叉/sanity 校验（errors 部分并入，触发外层重试；
+        # fatal/warnings 属"不可重试/转人工"类，不进重试回路）
+        try:
+            report = validate_extraction(result, state.get("text") or "")
+            errors.extend(e for e in report.errors if e not in errors)
+        except Exception as e:
+            logger.warning(f"[graph] validate 统一校验器异常（降级为仅清单校验）: {e}")
         if errors:
             logger.warning(f"[graph] validate ❌ {errors}")
         else:

@@ -1,0 +1,121 @@
+/* ════════════════════════════════════════════════
+   contract_ai · 合同条款排版样式（M23）
+   ──────────────────────────────────────────────
+   作用范围：
+   1. 合同表单「合同条款」Tab / 模板表单「模板条款」Tab 的全文预览面板
+   2. 条款编辑对话框（contract.clause form）的排版预览区
+   3. models/clause_rendering.py 渲染输出的 class（clause-h1/h2/p/title/section）
+   设计约束：
+   - 只用 class + 相对单位，字体栈跨平台兜底，浏览器渲染一致
+   - max-width + 居中：大屏可读性
+   ════════════════════════════════════════════════ */
+
+/* ── 预览面板容器（挂在 Html 字段包装层上） ── */
+.o_clause_preview_panel {
+    max-width: 900px;
+    max-height: 380px;          /* M24.1: 限高内滚动，避免长合同把下方列表顶出首屏 */
+    overflow-y: auto;
+    margin: 0 auto 12px auto;
+    padding: 20px 28px;
+    background: #ffffff;
+    border: 1px solid #e2e5ec;
+    border-radius: 8px;
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI",
+                 "Hiragino Sans GB", "Source Han Sans SC", sans-serif;
+    font-size: 14px;
+    line-height: 1.8;
+    color: #1f2430;
+    overflow-x: auto;
+}
+
+/* ── 合同级预览：每条条款一个 section ── */
+.o_clause_preview_panel .clause-section {
+    margin-bottom: 22px;
+    break-inside: avoid;
+}
+.o_clause_preview_panel .clause-section:last-child {
+    margin-bottom: 0;
+}
+
+/* 条款序号标题（1. 付款条款 …） */
+.o_clause_preview_panel .clause-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: #2e4057;
+    border-left: 3px solid #2e4057;
+    padding-left: 10px;
+    margin: 0 0 8px 0;
+}
+
+/* ── 正文内部结构（clause_rendering.py 输出） ── */
+/* 一级标题：第X条 / 一、 */
+.o_clause_preview_panel .clause-h1 {
+    font-weight: 600;
+    font-size: 14px;
+    color: #2e4057;
+    margin: 14px 0 6px 0;
+    text-align: left;
+}
+/* 二级标题：（一）/ 1. / 1.1 */
+.o_clause_preview_panel .clause-h2 {
+    font-weight: 600;
+    font-size: 14px;
+    padding-left: 2em;
+    margin: 10px 0 4px 0;
+    text-align: left;
+}
+/* 正文段落：首行缩进 2 字符（中文排版惯例） */
+.o_clause_preview_panel .clause-p {
+    text-indent: 2em;
+    margin: 0 0 6px 0;
+    text-align: justify;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+
+/* 单条款预览（编辑对话框）：外层无 clause-section，直接给面板兜底段距 */
+.o_clause_preview_panel > .clause-h1:first-child,
+.o_clause_preview_panel > .clause-p:first-child,
+.o_clause_preview_panel > .clause-h2:first-child {
+    margin-top: 0;
+}
+
+/* 窄屏（小窗口/移动端）：收窄留白，保持可读 */
+@media (max-width: 768px) {
+    .o_clause_preview_panel {
+        padding: 14px 16px;
+        font-size: 13px;
+    }
+}
+
+/* ════════════════════════════════════════════════
+   M24.1 列表「条款正文」列（content_html 挂在 tree 单元格上）
+   与预览面板共用 clause_rendering.py 输出的 class，
+   保证单元格内排版与预览一致（标题层级/缩进/段距）
+   ════════════════════════════════════════════════ */
+td.o_clause_content_html {
+    line-height: 1.7;
+    vertical-align: top;
+    min-width: 340px;
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI",
+                 "Hiragino Sans GB", "Source Han Sans SC", sans-serif;
+}
+td.o_clause_content_html .clause-h1 {
+    font-weight: 600;
+    color: #2e4057;
+    margin: 2px 0 4px 0;
+    text-align: left;
+}
+td.o_clause_content_html .clause-h2 {
+    font-weight: 600;
+    color: #2e4057;
+    padding-left: 1.5em;
+    margin: 6px 0 2px 0;
+    text-align: left;
+}
+td.o_clause_content_html .clause-p {
+    text-indent: 2em;
+    margin: 0 0 4px 0;
+    text-align: justify;
+    word-break: break-word;
+}

@@ -123,7 +123,7 @@ class ContractPaymentPlan(models.Model):
             ("paid", "已完成"),
             ("cancelled", "已取消"),
         ],
-        string="状态", default="draft", tracking=True, copy=False,
+        string="状态", default="draft", copy=False,
     )
 
     # ── 自动计算标志 ──

@@ -12,6 +12,7 @@ from datetime import date, timedelta
 from odoo import models, fields, api, _
 from odoo.exceptions import UserError, ValidationError
 from psycopg2.errors import SerializationFailure
+from markupsafe import escape
 
 _logger = logging.getLogger(__name__)
 
@@ -28,6 +29,9 @@ class Contract(models.Model):
         # 合同编号唯一（允许为空，但一旦填写不能重复）
         ("code_uniq", "unique(code)", "合同编号不能重复"),
     ]
+
+    # M22: AI 复核待办的固定摘要（用于识别/清理本模块创建的 activity）
+    _AI_REVIEW_ACTIVITY_SUMMARY = "AI 质量门禁待复核"
 
     # ════════════════════════════════════════════════
     # 基本信息
@@ -148,6 +152,11 @@ class Contract(models.Model):
     clause_ids = fields.One2many(
         "contract.clause", "contract_id", string="合同条款",
     )
+    # ── 合同条款全文排版预览（M23：按 sort_order 拼接全部条款，展示层渲染） ──
+    clauses_preview_html = fields.Html(
+        string="条款排版预览", compute="_compute_clauses_preview_html",
+        readonly=True, sanitize=False, copy=False,
+    )
     element_ids = fields.One2many(
         "contract.element", "contract_id", string="合同元素",
     )
@@ -180,10 +189,49 @@ class Contract(models.Model):
     )
     ai_extract_error = fields.Text(string="AI 识别错误信息", copy=False)
 
+    # ── AI 质量门禁（AI 服务 quality 块 → 分级落库）──
+    review_state = fields.Selection(
+        [
+            ("none", "无需复核"),
+            ("pending", "待人工复核"),
+            ("confirmed", "已人工确认"),
+        ],
+        string="复核状态", default="none", copy=False, index=True,
+        help="AI 质量门禁结果：置信度低/字段证据不符/关键字段缺失等风险"
+             "会进入「待人工复核」，复核确认后才能提交审批",
+    )
+    review_reasons = fields.Text(
+        string="复核原因", copy=False, readonly=True,
+        help="AI 质量门禁标记的风险明细（每行一条）",
+    )
+    system_confidence = fields.Float(
+        string="系统置信度", digits=(3, 2), copy=False,
+        help="AI 校验器综合置信度（证据核验/交叉校验/完整性），"
+             "低于阈值会被强制转入人工复核",
+    )
+
     @api.depends("ai_extracted_json")
     def _compute_is_ai_generated(self):
         for rec in self:
             rec.is_ai_generated = bool(rec.ai_extracted_json)
+
+    @api.depends("clause_ids.sort_order", "clause_ids.name", "clause_ids.content")
+    def _compute_clauses_preview_html(self):
+        """M23：合同条款全文排版预览（每条 = 编号标题 + 结构化正文渲染）。"""
+        for rec in self:
+            clauses = rec.clause_ids.sorted(key=lambda c: (c.sort_order, c.id))
+            parts = []
+            for idx, clause in enumerate(clauses, start=1):
+                title = "%d. %s" % (idx, clause.name or "条款 %d" % idx)
+                parts.append(
+                    '<section class="clause-section">'
+                    '<h3 class="clause-title">%s</h3>%s</section>'
+                    % (escape(title), clause.content_html or "")
+                )
+            if not parts:
+                rec.clauses_preview_html = '<p class="clause-p">暂无合同条款</p>'
+            else:
+                rec.clauses_preview_html = "".join(parts)
 
     # ════════════════════════════════════════════════
     # 状态机
@@ -269,6 +317,12 @@ class Contract(models.Model):
                 "请先上传合同 PDF 文件：请在「📎 合同文件」页签选择文件后，"
                 "先点击 💾 保存记录，再点击「AI 自动提取」。\n\n"
                 "提示：也可使用顶部菜单「上传 PDF - AI 识别」一步完成上传与识别。"
+            ))
+        # ── 重提取保护：已人工确认的数据不允许被 AI 静默覆盖 ──
+        if self.review_state == "confirmed":
+            raise UserError(_(
+                "该合同的 AI 提取结果已人工确认，重新识别会覆盖已确认的数据。\n\n"
+                "如确需重新识别，请先点击「♻️ 重置复核」按钮。"
             ))
         if self.ai_extract_status == "running":
             # 防僵尸：正常识别最长 ~5 分钟（AI_EXTRACT_TIMEOUT=300s），
@@ -461,6 +515,22 @@ class Contract(models.Model):
             "http://ai-service:8000",
         )
 
+    @staticmethod
+    def _strip_nul(value):
+        """递归清洗数据中的 NUL(0x00) 字符
+
+        PostgreSQL 的 TEXT 与 JSONB 类型均不允许字符串含 NUL 字节。
+        AI 返回的 JSON 树（extraction/classify/clauses/elements 等）在
+        入库前统一过一遍，dict/list/str 递归处理，其余类型原样返回。
+        """
+        if isinstance(value, str):
+            return value.replace("\x00", "")
+        if isinstance(value, dict):
+            return {k: Contract._strip_nul(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [Contract._strip_nul(v) for v in value]
+        return value
+
     def _apply_ai_result(self, result: dict, skip_code: bool = False):
         """将 AI 服务返回的 JSON 映射到模型字段
 
@@ -480,6 +550,13 @@ class Contract(models.Model):
             skip_code: 跳过合同编号写入（编号撞唯一约束降级重试时使用，
                        保留系统编号，其余字段照常回填）
         """
+        # ── 0. NUL(0x00) 防御清洗：PostgreSQL 的 TEXT/JSONB 均拒绝含 NUL
+        #    字节的字符串。PDF 文本层可能混入 \x00（pdfplumber/pypdf 解析
+        #    部分嵌入字体异常的 PDF 时），经 LLM 抄写原文可扩散到任意字段，
+        #    写库前递归清洗整棵返回树，避免 "A string literal cannot
+        #    contain NUL" 导致整个提取结果作废 ──
+        result = self._strip_nul(result)
+
         extraction = result.get("extraction", {})
         classify = result.get("classify", {})
 
@@ -496,12 +573,28 @@ class Contract(models.Model):
             "咨询合同": "consulting", "其他": "other",
         }
 
-        # ── 1. 置信度 + 原始 JSON ──
+        # ── 1. 置信度 + 原始 JSON + 质量门禁分级 ──
+        # quality 块由 AI 服务 gatekeeper 生成：
+        #   needs_review / review_reasons / system_confidence / critical_missing ...
+        quality = result.get("quality") or {}
+        needs_review = bool(quality.get("needs_review"))
+        reasons = [str(r) for r in (quality.get("review_reasons") or [])]
+
         vals = {
             "ai_extracted_json": result,
             "classify_confidence": classify.get("confidence", 0),
             "extraction_confidence": extraction.get("confidence", 0),
+            "system_confidence": quality.get("system_confidence") or 0,
+            # 分级落库：有风险 → 待人工复核；无风险 → 无需复核。
+            # 已人工确认的记录走到这里说明用户点了「重置复核」后重新提取，
+            # 以本次 AI 判定为准重新分级。
+            "review_state": "pending" if needs_review else "none",
+            "review_reasons": "\n".join("· %s" % r for r in reasons) if reasons else False,
         }
+        if not quality:
+            _logger.warning(
+                "AI 返回缺少 quality 块（旧版 AI 服务？），质量门禁未生效 | 合同=%s", self.name
+            )
 
         # ── 2. 基本字段 ──
         if extraction.get("contract_name"):
@@ -593,13 +686,34 @@ class Contract(models.Model):
                 subtype_id=self.env.ref("mail.mt_comment").id,
             )
 
-        # ── 9. 发布沟通记录 ──
-        self.message_post(
-            body=_("🤖 AI 自动提取完成 | 合同类型: %s | 置信度: %s")
-                 % (classify.get("contract_type", "-"),
-                    f"{classify.get('confidence', 0):.1%}"),
-            subtype_id=self.env.ref("mail.mt_comment").id,
-        )
+        # ── 9. 发布沟通记录（含质量门禁结果）──
+        done_body = _("🤖 AI 自动提取完成 | 合同类型: %s | 分类置信度: %s")
+        if needs_review:
+            reason_lines = "".join(
+                "<br/>· %s" % r for r in reasons
+            ) or "<br/>· （未提供明细）"
+            self.message_post(
+                body=(done_body % (
+                    classify.get("contract_type", "-"),
+                    f"{classify.get('confidence', 0):.1%}",
+                ))
+                + _("<br/><br/>⚠️ <b>质量门禁：存在 %d 项待复核风险，"
+                    "请人工核对并点击「✅ 复核确认」后才能提交审批</b>%s")
+                % (len(reasons) or 1, reason_lines),
+                subtype_id=self.env.ref("mail.mt_comment").id,
+            )
+            # M22: 待复核 → 给创建者创建 Odoo 待办（标记必达，不依赖用户主动查看）
+            self._sync_review_activity(True, reasons)
+        else:
+            self.message_post(
+                body=done_body % (
+                    classify.get("contract_type", "-"),
+                    f"{classify.get('confidence', 0):.1%}",
+                ) + _("<br/>✅ 质量门禁通过，无需人工复核"),
+                subtype_id=self.env.ref("mail.mt_comment").id,
+            )
+            # M22: 门禁通过（如重提取后质量变好）→ 清理遗留待办
+            self._sync_review_activity(False)
         _logger.info(
             "✅ 合同 %s AI 提取完成 | name=%s | amount=%s | date_signed=%s",
             self.name, vals.get("name"), vals.get("amount"), vals.get("date_signed"),
@@ -1065,15 +1179,135 @@ class Contract(models.Model):
         })
 
     def action_submit_approval(self):
-        """草拟 → 审批中（提交审批）"""
+        """草拟 → 审批中（提交审批）
+
+        ⚠️ 审批卡点：AI 质量门禁判定「待人工复核」的合同必须先复核确认，
+        防止错误信息（证据不符/关键缺失/置信度过低）流入审批与用印环节。
+        """
         for rec in self:
             if rec.state != "draft":
                 return rec._notify("状态错误", "只有草拟状态才能提交审批", "warning")
+            if rec.review_state == "pending":
+                raise UserError(_(
+                    "AI 质量门禁存在待复核风险，请先核对并点击「✅ 复核确认」后再提交审批。\n\n"
+                    "风险明细：\n%s"
+                ) % (rec.review_reasons or "（未提供明细，请查看 AI 提取结果）"))
             old = rec.state
             rec.state = "approval"
             rec._log_state_change(old, "approval")
             rec._log_approval("submit", "提交审批")
         return self._notify("已提交", "合同已提交审批")
+
+    # ════════════════════════════════════════════════
+    # AI 质量门禁：复核确认 / 重置复核
+    # ════════════════════════════════════════════════
+
+    def _sync_review_activity(self, needs_review: bool, reasons: list = None):
+        """M22: 把"待复核"同步为 Odoo 待办（mail.activity）——标记必达。
+
+        AI 转人工只是 chatter 告警时用户可能看不到；创建待办后：
+        - 复核人（合同创建者）的待办菜单直接出现，避免风险被遗忘
+        - 重提取/确认/重置时自动清理，不留僵尸待办
+        """
+        self.ensure_one()
+        old = self.activity_ids.filtered(
+            lambda a: a.summary == self._AI_REVIEW_ACTIVITY_SUMMARY
+        )
+        if not needs_review:
+            old.unlink()
+            return
+        old.unlink()  # 重提取场景：先清旧待办再建新的，避免重复堆积
+        reason_lines = "".join("<br/>· %s" % r for r in (reasons or [])) or "<br/>· （详见 chatter 记录）"
+        self.activity_schedule(
+            "mail.mail_activity_data_todo",
+            summary=self._AI_REVIEW_ACTIVITY_SUMMARY,
+            note=_("AI 质量门禁标记 %d 项风险，请对照 PDF 原件核对后点击「✅ 复核确认」：%s")
+                  % (len(reasons or []) or 1, reason_lines),
+            user_id=self.create_uid.id or self.env.user.id,
+            date_deadline=fields.Date.context_today(self) + timedelta(days=1),
+        )
+
+    def action_confirm_review(self):
+        """人工确认 AI 提取结果（待人工复核 → 已人工确认）"""
+        for rec in self:
+            if rec.review_state != "pending":
+                continue
+            rec.write({"review_state": "confirmed", "review_reasons": False})
+            rec._sync_review_activity(False)  # M22: 复核完成 → 清理待办
+            rec._log_approval("review_confirm", "人工确认 AI 提取结果")
+            rec.message_post(
+                body=_("✅ <b>复核确认</b>：人工已核对 AI 提取结果，风险项已处理，可提交审批"),
+                subtype_id=self.env.ref("mail.mt_comment").id,
+            )
+        return self._notify("复核确认", "AI 提取结果已人工确认")
+
+    def action_reset_review(self):
+        """重置复核状态：允许重新 AI 提取覆盖已确认数据（明确的人工操作）"""
+        for rec in self:
+            if rec.review_state == "none":
+                continue
+            old_label = dict(self._fields["review_state"].selection).get(rec.review_state, rec.review_state)
+            rec.write({"review_state": "none", "review_reasons": False})
+            rec._sync_review_activity(False)  # M22: 重置后待重新提取 → 清理旧待办
+            rec._log_approval("review_reset", "重置复核状态（原：%s）" % old_label)
+            rec.message_post(
+                body=_("♻️ <b>复核状态已重置</b>：可重新执行「🤖 AI 自动提取」，"
+                       "新结果将以 AI 判定重新分级"),
+                subtype_id=self.env.ref("mail.mt_comment").id,
+            )
+        return self._notify("已重置", "复核状态已重置，可重新 AI 提取")
+
+    # ════════════════════════════════════════════════
+    # M24: 条款重新拆分（按章节把「全文」等粗粒度条款拆成独立条款行）
+    # ════════════════════════════════════════════════
+
+    def action_resplit_clauses(self):
+        """按章节重新拆分 AI 条款
+
+        把当前 source=ai_extracted 条款的正文合并后调 AI 服务 /api/contract/segment
+        重新分段（规则式，零 LLM 成本），重建条款记录：
+          - 只覆盖 source=ai_extracted 条款，人工录入/模板条款不动
+          - 识别「第X条」「一、二、三、」章节头，文头信息归「合同基本信息」(other)
+          - 文本规范化：清理多余空格/统一标点（不碰编号、甲乙方、金额等业务数据）
+        """
+        for rec in self:
+            ai_clauses = rec.clause_ids.filtered(lambda c: c.source == "ai_extracted")
+            if not ai_clauses:
+                return rec._notify("无可拆分条款", "没有 AI 提取的条款可重新拆分", "warning")
+            full_text = "\n".join(
+                c.content for c in ai_clauses.sorted("sort_order") if c.content
+            ).strip()
+            if not full_text:
+                return rec._notify("正文为空", "AI 条款正文为空，无法拆分", "warning")
+
+            ai_url = rec._get_ai_service_url().rstrip("/")
+            try:
+                resp = requests.post(
+                    f"{ai_url}/api/contract/segment",
+                    json={"text": full_text},
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                payload = resp.json()
+            except Exception as e:
+                _logger.error("条款重新拆分调用 AI 服务失败 | contract=%s | %s", rec.name, e)
+                raise UserError(_("条款拆分服务不可用（%s），请稍后重试或检查 AI 服务状态") % ai_url)
+
+            data = payload.get("data") or {}
+            clauses = data.get("clauses") or []
+            if len(clauses) <= 1:
+                return rec._notify(
+                    "无需拆分",
+                    "未识别出多章节结构（可能已拆分或不规则），保持原状",
+                    "warning",
+                )
+            rec._generate_clauses_from_ai(clauses)
+            rec.message_post(
+                body=_("🧩 <b>条款重新拆分</b>：%d 条 → %d 条独立条款（按章节规则分段）")
+                     % (len(ai_clauses), len(clauses)),
+                subtype_id=self.env.ref("mail.mt_comment").id,
+            )
+        return self._notify("拆分完成", "条款已按章节重新拆分")
 
     def action_approve(self):
         """审批中 → 已用印（审批通过）"""
