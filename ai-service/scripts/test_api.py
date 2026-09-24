@@ -1,5 +1,8 @@
+from pathlib import Path
 import requests, json
-with open(r"d:\Project\langchain\contract-system\ai-service\examples\service_sample.pdf", "rb") as f:
+
+SAMPLE_PDF = Path(__file__).resolve().parent.parent / "examples" / "service_sample.pdf"
+with open(SAMPLE_PDF, "rb") as f:
     r = requests.post("http://localhost:8000/api/contract/extract",
                       files={"file": ("s.pdf", f.read())}, timeout=60)
 raw = r.json()

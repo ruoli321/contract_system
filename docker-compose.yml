@@ -93,7 +93,7 @@ services:
       - ./test_pdfs:/test_pdfs:ro
       # HuggingFace 模型缓存（宿主机下载 → 容器离线可用，避免每次重建都重下）
       # Windows: C:\Users\<user>\.cache\huggingface\hub → 容器内 /root/.cache/huggingface/hub
-      - ${HF_CACHE_HOST:-C:/Users/ruoli/.cache/huggingface/hub}:/root/.cache/huggingface/hub:ro
+      - ${HF_CACHE_HOST:?请在 .env 中设置 HF_CACHE_HOST（HuggingFace 模型缓存目录）}:/root/.cache/huggingface/hub:ro
       # PaddleOCR/PaddleX 模型缓存（命名卷持久化，首次 OCR 自动下载后复用）
       - paddle_models:/root/.paddlex
       # 评估/对比报告输出（宿主机 ai-service/reports 目录）

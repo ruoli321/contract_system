@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 
 DEMO_STEPS = [
@@ -126,7 +127,7 @@ def run_steps(slow: bool = False):
             try:
                 result = subprocess.run(
                     cmd, shell=True, capture_output=True, text=True,
-                    cwd="d:/Project/langchain/contract-system",
+                    cwd=str(Path(__file__).resolve().parent.parent.parent),
                     timeout=30,
                 )
                 output = (result.stdout or result.stderr).strip()

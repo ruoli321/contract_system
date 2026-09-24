@@ -1,7 +1,6 @@
 """M8 端到端验证 - 实际跑 Chroma 完整链路"""
 import sys
 import json
-sys.path.insert(0, r'd:\Project\langchain\contract-system\ai-service')
 
 # 先确保 chromadb 可用
 try:
