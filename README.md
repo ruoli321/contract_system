@@ -2,16 +2,16 @@
 
 基于 **Odoo 17 CE + FastAPI + Chroma** 的企业级合同智能处理平台。
 
-> 版本：v1.2.0 · 最后更新：2026-09-11 · 进度：M1–M18 + P0 三项全部完成 · pytest 128 项全通过
+> 版本：v1.3.0 · 最后更新：2026-09-24 · 进度：M1–M24 全部完成 · pytest 128 项全通过
 
 ## 这是什么
 
-一句话：**合同 PDF 传进去，结构化业务数据出来**。
+一句话：**合同 PDF 传进去，结构化业务数据出来；机器确定的自动入库，不确定的显式转人工**。
 
 用户在 Odoo 上传一份合同 PDF，AI 服务自动完成「解析 → 分类 → 关键字段提取」，结果直接回填合同台账、自动生成收付款计划，并支持审批流、逾期提醒、到期归档——把人工录入一份合同半小时的活儿压缩到 1-2 分钟无人值守完成。
 
 - **业务平台**（Odoo 17 自定义模块 `contract_ai`）：合同台账、5 态状态机、审批流、收付款台账、报表导出
-- **AI 引擎**（FastAPI 微服务）：PDF 智能解析分流、RAG 增强字段提取、LangGraph 多 Agent 编排、双层校验兜底
+- **AI 引擎**（FastAPI 微服务）：三信号 PDF 分流解析、RAG 增强 Few-shot 选例、LangGraph 多 Agent 编排、五层确定性校验、置信度分流门控
 
 ## 🏗️ 架构概览
 
@@ -80,18 +80,21 @@ graph TB
 ③ 文本清洗    去页码/页眉页脚/水印/OCR 噪声 + NUL(0x00) 字节清洗
 ④ 合同分类    关键词规则 + LLM 双通道，置信度融合（LLM 失败自动降级规则兜底）
 ⑤ 范例检索    按合同类型从 Chroma 检索 top-3 金标准范例（few-shot 注入提示词）
-⑥ 字段提取    LLM(json_mode, temperature=0) 输出 15 个字段 JSON
-⑦ 校验兜底    Pydantic（类型/枚举 Literal 硬约束）→ 业务校验（日期硬约束 + 大写金额互验）
-              → 失败带错误信息重试 ≤3 次 → 正则补齐漏填字段（只补缺失、绝不覆盖）
-⑧ 结果落库    字段自动回填合同台账 + chatter 通知；LLM 客户端首次调用时延迟初始化
-⑨ 业财联动    付款条款正则解析 → 自动生成收付款计划 → 计划总额与合同金额平衡校验
+⑥ 字段提取    LLM(json_mode, temperature=0) 输出 15 个字段 JSON；RAG 检索 top-3 同类范例作 few-shot
+⑦ 校验兜底    容错解析三级 → 动态 Pydantic（类型/枚举 Literal 硬约束）→ 正则补缺（只补缺失不覆盖）
+              → 五层确定性校验（格式/存在性证据/一致性交叉/业务语义/来源质量）
+              → 错误三分法：errors 喂回 LLM 自纠正（≤3 次 + 150s 熔断）/ fatal 转人工 / warnings 标记
+⑧ 分流落库    gatekeeper 汇总六类风险信号 + 置信度（四路客观信号加权，不依赖 LLM 自评）
+              → 全干净自动回填台账；任一触发 review_state=pending 卡审批、风险明细进 chatter、待办派发
+⑨ 业财联动    付款条款正则解析 → 自动生成收付款计划 → 计划总额与合同金额平衡校验（容差 1%）
 ⑩ 持续运营    双 cron：逾期计划按合同聚合提醒 + 到期合同自动归档；审批流 draft→approval→seal→archived
 ```
 
 关键设计原则：
-- **语义完整性**：切块按条款编号边界切（800 字符 + 50 重叠），保证检索到的每个 chunk 是完整语义单元
-- **LLM 输出永不直接信**：四层校验闭环（JSON 容错解析 → Schema 校验 → 业务校验 → 正则兜底）
-- **确定性优先**：能用规则解决的不上 LLM（分类兜底、付款条款解析、格式化字段补齐）
+- **语义完整性**：切块按条款编号边界切（800 字符 + 50 重叠，卡齐 embedding 512 token 窗口），保证检索到的每个 chunk 是完整语义单元
+- **检索粒度跟消费粒度走**：块级检索打分 → 按范例聚合 → 范例级返回 few-shot；用户原文不入库（提取是全文理解任务，检索会静默漏提）
+- **LLM 输出永不直接信**：形状由 Pydantic 管、值由五层校验管、错了由喂回重试救、救不了由置信度分流交给人
+- **确定性优先**：能用规则解决的不上 LLM（分类兜底、付款条款解析、格式化字段补齐、校验引擎纯规则零 token）
 
 ## 📂 项目结构
 
@@ -101,7 +104,6 @@ contract-system/
 ├── .env.example
 ├── .gitignore
 ├── README.md                      ★ 本文档
-├── PROJECT_CONTEXT.md             # AI 记忆文件（开发必读）
 ├── start.ps1                      # Windows 一键启动脚本
 │
 ├── odoo/addons/contract_ai/       # ★ 唯一自定义模块
@@ -135,37 +137,40 @@ contract-system/
     │   ├── config.py              # pydantic-settings（.env 驱动）
     │   ├── main.py                # FastAPI + lifespan + 6 路由
     │   └── services/
-    │       ├── pdf_parser.py      # M6: PDF 分流（pdfplumber / PaddleOCR）
-    │       ├── chunker.py         # M7: 清洗 + 语义切块（纯标准库）
-    │       ├── vector_store.py    # M8: Chroma HttpClient 双集合
-    │       ├── prompt_manager.py  # M9: YAML 提示词 + 字段字典 JSON
-    │       ├── llm_client.py      # M10: BaseLLM + 重试 3 次指数退避
-    │       ├── classifier.py      # M11: 规则 + LLM 双通道 + 加权融合
-    │       ├── rag_learner.py     # M12: few-shot 检索 + 格式化
-    │       └── extractor.py       # M13: RAG 提取 + JSON Schema + 4 层重试
+    │       ├── pdf_parser.py          # M6: 三信号页级分流（text/text_layered/scanned/mixed）
+    │       ├── chunker.py             # M7: 清洗 + 语义切块（条款边界，纯标准库）
+    │       ├── vector_store.py        # M8: Chroma HttpClient 双集合
+    │       ├── prompt_manager.py      # M9: YAML 提示词 + 字段字典 JSON
+    │       ├── llm_client.py          # M10: BaseLLM（OpenAI 兼容协议，四家供应商可切）
+    │       ├── classifier.py          # M11: 规则 + LLM 双通道 + 加权融合
+    │       ├── rag_learner.py         # M12: 块级检索→范例聚合→分层降级
+    │       ├── extractor.py           # M13: RAG 提取 + 容错解析 + 喂回重试
+    │       ├── postprocess_fallback.py# M20: 正则补缺（日期/金额/编号模式）
+    │       ├── validator.py           # M21: 五层统一校验器（单一数据源 CRITICAL_FIELDS）
+    │       ├── gatekeeper.py          # M22: 置信度门控（六类风险信号 → needs_review）
+    │       ├── chinese_amount.py      # 中文大写金额 ↔ 数字换算（互验基础）
+    │       └── graph/
+    │           └── contract_graph.py  # M23: LangGraph 5 节点工作流 + Runnable 线性链
     │
     ├── prompts/
-    │   ├── field_dict.json        # 9 组枚举字段字典
-    │   └── v1~v3/prompts.yaml     # 版本化提示词
+    │   ├── field_dict.json        # 单一数据源：字段类型/枚举/必填/关键标记
+    │   └── v1~v4/prompts.yaml     # 版本化提示词（v4 当前生效）
     │
-    ├── examples/annotations/      # 12 份金标准合同标注
+    ├── examples/                  # RAG 金标准范例库（JSON 标注 + 样例 PDF）
     │
-    ├── tests/                     ★ M18 pytest 单元测试
+    ├── tests/                     ★ pytest 单元测试
     │   ├── conftest.py            # fixtures + 示例合同文本
     │   ├── test_chunker.py        # 40+ 测试（清洗/切块/clause 检测）
     │   ├── test_classifier.py     # 15+ 测试（规则/融合/边界）
-    │   └── test_field_validator.py # 20+ 测试（日期/金额/模糊匹配/枚举）
+    │   ├── test_field_validator.py # 20+ 测试（日期/金额/模糊匹配/枚举）
+    │   └── test_contract_graph.py # LangGraph 工作流（回路/计数/上限）
     │
     ├── scripts/
-    │   ├── bootstrap_examples.py  # 金标准入库
-    │   ├── evaluate_m15.py        # M15 评估：RAGAS 4 指标 + Markdown 报告
-    │   ├── run_accuracy_test.py   ★ M18 简化版准确率测试脚本
-    │   ├── demo_script.py         ★ M18 演示步骤辅助脚本
-    │   └── generate_annotation.py
+    │   ├── bootstrap_examples.py  # 金标准范例入库
+    │   ├── evaluate_accuracy.py   # 准确率评估（few-shot 对照实验）
+    │   └── eval_ocr_pipeline.py   # OCR 管线 CER 对比评估
     │
-    ├── reports/                   # evaluate_m15.py 产出的 Markdown + JSON
-    │
-    └── test_m10~m14.py            # 各模块独立 mock 测试脚本
+    └── test_m10~m24.py            # 各模块独立 mock 测试脚本
 ```
 
 ## 🚀 快速开始
