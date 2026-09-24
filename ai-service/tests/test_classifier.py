@@ -200,6 +200,6 @@ class TestRealSamples:
         assert result.contract_type == "租赁合同"
 
     def test_sales_sample(self, rule_only_classifier):
-        text = "卖方将产品出售给买方，交货后买方支付货款。"
+        text = "乙方为销售方，向甲方销售办公设备一批，货款按季度结算。"
         result = rule_only_classifier.classify(text, "")
         assert result.contract_type == "销售合同"

@@ -54,9 +54,18 @@ FULL_FIELDS = {
     "contract_type": "采购合同",
     "payment_terms": "签订后 5 个工作日内支付 30% 预付款",
     "breach_clause": "逾期交货每日按合同金额 0.5‰ 支付违约金",
-    "dispute_resolution": "诉讼",
+    "dispute_resolution": "向人民法院提起诉讼",
     "confidence": 0.92,
 }
+
+# 含全部字段证据的合同原文（存在性校验要求字段值能在原文中找到依据）
+TEST_CONTRACT_TEXT = """XX 服务器采购合同
+合同编号：CG-2026-0001
+甲方（买方）：XX 科技有限公司
+乙方（供方）：YY 信息技术有限公司
+合同总金额：人民币 500000.00 元（大写：伍拾万元整）
+签订日期：2026-08-01，生效日期：2026-08-01，到期日期：2027-07-31
+"""
 
 
 def _make_extract_result(fields: dict, attempt: int) -> ExtractResult:
@@ -104,7 +113,7 @@ def test_graph_happy_path():
     classifier, extractor = MockClassifier(), MockExtractor()
     graph_app, _ = build_contract_graph(classifier, extractor)
 
-    result = run_contract_graph(graph_app, "测试合同文本")
+    result = run_contract_graph(graph_app, TEST_CONTRACT_TEXT)
 
     assert result["used_langgraph"] is True
     assert result["contract_type"] == "采购合同"
@@ -122,7 +131,7 @@ def test_graph_retry_loop_recovers():
     classifier, extractor = MockClassifier(), MockExtractor(fail_first=True)
     graph_app, _ = build_contract_graph(classifier, extractor)
 
-    result = run_contract_graph(graph_app, "测试合同文本")
+    result = run_contract_graph(graph_app, TEST_CONTRACT_TEXT)
 
     assert result["retry_count"] == 1
     assert extractor.calls == 2
@@ -135,7 +144,7 @@ def test_graph_max_retries_no_infinite_loop():
     classifier, extractor = MockClassifier(), MockExtractor(always_fail=True)
     graph_app, _ = build_contract_graph(classifier, extractor)
 
-    result = run_contract_graph(graph_app, "测试合同文本")
+    result = run_contract_graph(graph_app, TEST_CONTRACT_TEXT)
 
     # 1 次初始 + 2 次外重试 = 3 次提取调用
     assert extractor.calls == 1 + MAX_GRAPH_RETRIES
@@ -150,7 +159,7 @@ def test_linear_chain_d3_evidence():
     classifier, extractor = MockClassifier(), MockExtractor()
     _, linear_chain = build_contract_graph(classifier, extractor)
 
-    result = run_linear_chain(linear_chain, "测试合同文本")
+    result = run_linear_chain(linear_chain, TEST_CONTRACT_TEXT)
 
     assert result["used_langchain"] is True
     assert result["contract_type"] == "采购合同"
