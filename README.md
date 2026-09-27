@@ -2,6 +2,12 @@
 
 基于 **Odoo 17 CE + FastAPI + Chroma** 的企业级合同智能处理平台。
 
+| 合同台账 | AI 识别结果回填 |
+|:---:|:---:|
+| ![合同台账列表](docs/images/contract-list.png) | ![AI 识别结果详情](docs/images/contract-detail-ai.png) |
+| **字段提取明细与置信度** | **业务条款自动解析** |
+| ![字段提取与置信度](docs/images/contract-extraction-fields.png) | ![业务条款解析](docs/images/contract-business-terms.png) |
+
 > 版本：v1.3.0 · 最后更新：2026-09-24 · 进度：M1–M24 全部完成 · pytest 133 项全通过
 
 ## 这是什么
