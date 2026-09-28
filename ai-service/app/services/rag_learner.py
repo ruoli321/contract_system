@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -81,9 +83,19 @@ class RAGLearner:
         # 每次 add_example / load_examples 时填充
         self._examples: dict[str, dict] = {}
 
+        # ── Cross-Encoder 精排（rerank）──
+        # 向量粗排（Bi-Encoder）后，对候选范例做逐对精排：query 与范例最佳块
+        # 拼接送入 Cross-Encoder，token 级交互打分，排序精度高于余弦相似度。
+        # 延迟加载（首次检索才初始化）+ 失败自动降级（退回纯向量排序）。
+        self._reranker = None
+        self._reranker_ready = False
+        self._rerank_lock = threading.Lock()
+        self._rerank_enabled = os.getenv("RERANK_ENABLED", "true").lower() == "true"
+        self._rerank_model = os.getenv("RERANK_MODEL", "BAAI/bge-reranker-base")
+
         logger.info(
             f"📚 RAGLearner 初始化 | collection='{collection_name}' | "
-            f"vector_store={type(vector_store).__name__}"
+            f"vector_store={type(vector_store).__name__} | rerank={'on' if self._rerank_enabled else 'off'}"
         )
 
     # ═══════════════════════════════════════════════════════════════
@@ -316,6 +328,39 @@ class RAGLearner:
     # 检索：相似范例
     # ═══════════════════════════════════════════════════════════════
 
+    # ═══════════════════════════════════════════════════════════════
+    # Cross-Encoder 精排（rerank）
+    # ═══════════════════════════════════════════════════════════════
+
+    def _rerank_scores(self, query_text: str, texts: list[str]) -> Optional[list[float]]:
+        """
+        Cross-Encoder 精排：对 (query, text) 逐对打分。
+
+        Returns:
+            分数列表（与 texts 等长）；未启用/加载失败返回 None（调用方降级为向量分）。
+        """
+        if not self._rerank_enabled:
+            return None
+        with self._rerank_lock:
+            if not self._reranker_ready:
+                try:
+                    from sentence_transformers import CrossEncoder
+                    logger.info(f"  ⏳ 加载 rerank 模型: {self._rerank_model}")
+                    self._reranker = CrossEncoder(self._rerank_model, max_length=512)
+                    self._reranker_ready = True
+                    logger.info("  ✅ rerank 模型就绪")
+                except Exception as e:
+                    logger.warning(f"  ⚠️ rerank 模型加载失败，降级为纯向量排序: {e}")
+                    self._rerank_enabled = False  # 本次进程内不再重试
+                    return None
+        try:
+            pairs = [(query_text, t) for t in texts]
+            scores = self._reranker.predict(pairs)
+            return [float(s) for s in scores]
+        except Exception as e:
+            logger.warning(f"  ⚠️ rerank 推理失败，降级为纯向量排序: {e}")
+            return None
+
     def retrieve_examples(
         self,
         query_text: str,
@@ -402,8 +447,20 @@ class RAGLearner:
                 if eid not in exclude_ids
             }
 
-        # ── 4. 按分数排序，取 top_k ──
-        sorted_ids = sorted(example_best.keys(), key=lambda eid: example_best[eid]["score"], reverse=True)[:top_k]
+        # ── 4. Cross-Encoder 精排（rerank）→ 按精排分排序，取 top_k ──
+        # 粗排分仅用于召回；最终排序以 Cross-Encoder 逐对打分为准。
+        # rerank 不可用（未启用/加载失败/推理失败）时降级回向量相似度排序。
+        cand_eids = list(example_best.keys())
+        rerank_scores = self._rerank_scores(
+            query_text, [example_best[eid]["matched_chunk"] for eid in cand_eids]
+        )
+        if rerank_scores is not None:
+            for eid, s in zip(cand_eids, rerank_scores):
+                example_best[eid]["rerank_score"] = s
+            sort_key = lambda eid: example_best[eid]["rerank_score"]  # noqa: E731
+        else:
+            sort_key = lambda eid: example_best[eid]["score"]  # noqa: E731
+        sorted_ids = sorted(cand_eids, key=sort_key, reverse=True)[:top_k]
 
         # ── 5. 组装完整范例数据 ──
         results = []
